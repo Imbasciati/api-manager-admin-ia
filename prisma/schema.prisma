@@ -1,0 +1,305 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Usuario {
+  id            String          @id @default(uuid())
+  nome          String
+  email         String          @unique
+  senha         String
+  perfil        Perfil          @default(VENDEDOR)
+  status        Boolean         @default(true)
+  agenteIaId    String?
+  agenteIa      Agente?         @relation(fields: [agenteIaId], references: [id])
+  criadoEm      DateTime        @default(now())
+  logs          LogAtividade[]
+  custos        CustoIA[]
+  monitoramento Monitoramento[]
+  refreshTokens RefreshToken[]
+}
+
+enum Perfil {
+  ADMIN
+  SUPERVISOR
+  VENDEDOR
+}
+
+model Agente {
+  id                  String          @id @default(uuid())
+  nome                String
+  promptSistema       String          @db.Text
+  contextoProdutos    String?         @db.Text
+  tom                 Tom             @default(PROFISSIONAL)
+  modelo              String          @default("gpt-4o")
+  temperatura         Float           @default(0.7)
+  tokensMaximos       Int             @default(500)
+  ativo               Boolean         @default(true)
+  todosVendedores     Boolean         @default(true)
+  canalIntegracao     CanalIntegracao @default(NENHUM)
+  unnichatApiKey      String?         @db.Text
+  unnichatAtivo       Boolean         @default(false)
+  unnichatConexaoNome String?
+  produto             String?
+  atuacao             String?
+  documentos          Documento[]
+  vendedores          Usuario[]
+  criadoEm            DateTime        @default(now())
+  custos              CustoIA[]
+  monitoramento       Monitoramento[]
+  atendimentos        Atendimento[]
+}
+
+enum CanalIntegracao {
+  NENHUM
+  UNNICHAT
+  MANYCHAT
+  AMBOS
+}
+
+enum Tom {
+  PROFISSIONAL
+  CASUAL
+  FORMAL
+  AMIGAVEL
+}
+
+model Documento {
+  id       String   @id @default(uuid())
+  nome     String
+  path     String
+  tamanho  Int
+  agenteId String
+  agente   Agente   @relation(fields: [agenteId], references: [id], onDelete: Cascade)
+  criadoEm DateTime @default(now())
+}
+
+model Monitoramento {
+  id               String         @id @default(uuid())
+  usuarioId        String
+  usuario          Usuario        @relation(fields: [usuarioId], references: [id])
+  agenteId         String
+  agente           Agente         @relation(fields: [agenteId], references: [id])
+  campanha         String
+  telefone         String
+  mensagemOriginal String         @db.Text
+  respostaIA       String         @db.Text
+  statusResposta   StatusResposta @default(SUGESTAO)
+  criadoEm         DateTime       @default(now())
+
+  @@index([agenteId, criadoEm])
+  @@index([usuarioId, criadoEm])
+}
+
+enum StatusResposta {
+  SUGESTAO
+  AUTO_RESPOSTA
+  EDITADA
+  IGNORADA
+}
+
+model CustoIA {
+  id           String   @id @default(uuid())
+  usuarioId    String
+  usuario      Usuario  @relation(fields: [usuarioId], references: [id])
+  agenteId     String?
+  agente       Agente?  @relation(fields: [agenteId], references: [id])
+  modelo       String
+  provider     String
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  custoUsd     Float    @default(0)
+  duracao      Int      @default(0)
+  criadoEm     DateTime @default(now())
+
+  @@index([usuarioId, criadoEm])
+  @@index([agenteId, criadoEm])
+}
+
+model LogAtividade {
+  id            String    @id @default(uuid())
+  usuarioId     String
+  usuario       Usuario   @relation(fields: [usuarioId], references: [id])
+  evento        EventoLog
+  ip            String?
+  duracaoSessao Int?
+  acao          String?
+  descricao     String?   @db.Text
+  entidade      String?
+  entidadeId    String?
+  metadados     Json?
+  criadoEm      DateTime  @default(now())
+
+  @@index([usuarioId, criadoEm])
+  @@index([evento, criadoEm])
+}
+
+enum EventoLog {
+  CONECTOU
+  DESCONECTOU
+  ERRO
+  ACAO
+}
+
+model ErroSistema {
+  id         String     @id @default(uuid())
+  severidade Severidade
+  categoria  String
+  mensagem   String     @db.Text
+  usuarioId  String?
+  origem     String?
+  resolvido  Boolean    @default(false)
+  criadoEm   DateTime   @default(now())
+}
+
+enum Severidade {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+model OrientacaoGlobal {
+  id           String   @id @default(uuid())
+  conteudo     String   @db.Text
+  atualizadoEm DateTime @updatedAt
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  criadoEm  DateTime @default(now())
+}
+
+model ModeloIA {
+  id                     String   @id @default(uuid())
+  nome                   String
+  modelId                String   @unique
+  provider               String
+  descricao              String?  @db.Text
+  ativo                  Boolean  @default(true)
+  custoInputPorMilToken  Float    @default(0)
+  custoOutputPorMilToken Float    @default(0)
+  criadoEm               DateTime @default(now())
+  atualizadoEm           DateTime @updatedAt
+}
+
+model ConfiguracaoProvedor {
+  id           String   @id @default(uuid())
+  provider     String   @unique
+  apiKey       String   @db.Text
+  ativo        Boolean  @default(true)
+  verificado   Boolean  @default(false)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+}
+
+enum StatusAtendimento {
+  NOVO
+  EM_ANDAMENTO
+  AGUARDANDO
+  FINALIZADO
+}
+
+enum OrigemMensagem {
+  CLIENTE
+  AGENTE_IA
+  VENDEDOR
+}
+
+model Atendimento {
+  id           String                @id @default(uuid())
+  conversaId   String?               @unique
+  telefone     String
+  nome         String?
+  campanha     String?
+  canal        String                @default("whatsapp")
+  status       StatusAtendimento     @default(NOVO)
+  agenteId     String?
+  agente       Agente?               @relation(fields: [agenteId], references: [id])
+  nomeAgente   String?
+  mensagens    MensagemAtendimento[]
+  criadoEm     DateTime              @default(now())
+  atualizadoEm DateTime              @updatedAt
+
+  @@index([status, atualizadoEm])
+  @@index([telefone, canal])
+}
+
+model MensagemAtendimento {
+  id             String         @id @default(uuid())
+  atendimentoId  String
+  atendimento    Atendimento    @relation(fields: [atendimentoId], references: [id], onDelete: Cascade)
+  origem         OrigemMensagem @default(CLIENTE)
+  conteudo       String         @db.Text
+  criadoEm       DateTime       @default(now())
+}
+
+model ConfiguracaoWebhook {
+  id             String    @id @default(uuid())
+  nome           String
+  token          String    @unique @default(uuid())
+  ativo          Boolean   @default(true)
+  descricao      String?
+  totalEventos   Int       @default(0)
+  ultimoEventoEm DateTime?
+  criadoEm       DateTime  @default(now())
+  atualizadoEm   DateTime  @updatedAt
+}
+
+// ── Agente de Vendas IA ────────────────────────────────────────────────────────
+
+model MessageBuffer {
+  id          String   @id @default(uuid())
+  contactId   String
+  conteudo    String   @db.Text
+  tipo        String   @default("text")
+  mediaUrl    String?
+  transcricao String?  @db.Text
+  processado  Boolean  @default(false)
+  criadoEm    DateTime @default(now())
+
+  @@index([contactId, processado])
+}
+
+model ConversationMemory {
+  id           String   @id @default(uuid())
+  contactId    String   @unique
+  historico    Json
+  atualizadoEm DateTime @updatedAt
+  criadoEm     DateTime @default(now())
+}
+
+model AgentExecution {
+  id            String   @id @default(uuid())
+  contactId     String
+  inputMensagem String   @db.Text
+  classificacao String
+  resposta      String?  @db.Text
+  inputTokens   Int      @default(0)
+  outputTokens  Int      @default(0)
+  custoUsd      Float    @default(0)
+  duracao       Int      @default(0)
+  erro          String?  @db.Text
+  criadoEm      DateTime @default(now())
+
+  @@index([contactId])
+  @@index([criadoEm])
+}
+
+model ConfiguracaoAgente {
+  id           String   @id @default(uuid())
+  chave        String   @unique
+  valor        String   @db.Text
+  descricao    String?
+  sensivel     Boolean  @default(false)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+}

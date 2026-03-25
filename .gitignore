@@ -1,0 +1,22 @@
+
+dist
+.env
+uploads
+
+# Prisma
+prisma/generated
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea
+# Node.js
+node_modules/

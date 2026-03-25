@@ -1,0 +1,149 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Usuario {
+  id            String          @id @default(uuid())
+  nome          String
+  email         String          @unique
+  senha         String
+  perfil        Perfil          @default(VENDEDOR)
+  status        Boolean         @default(true)
+  agenteIaId    String?
+  agenteIa      Agente?         @relation(fields: [agenteIaId], references: [id])
+  criadoEm      DateTime        @default(now())
+  logs          LogAtividade[]
+  custos        CustoIA[]
+  monitoramento Monitoramento[]
+  refreshTokens RefreshToken[]
+}
+
+enum Perfil {
+  ADMIN
+  SUPERVISOR
+  VENDEDOR
+}
+
+model Agente {
+  id               String          @id @default(uuid())
+  nome             String
+  promptSistema    String          @db.Text
+  contextoProdutos String?         @db.Text
+  tom              Tom             @default(PROFISSIONAL)
+  modelo           String          @default("gpt-4o")
+  temperatura      Float           @default(0.7)
+  tokensMaximos    Int             @default(500)
+  ativo            Boolean         @default(true)
+  todosVendedores  Boolean         @default(true)
+  documentos       Documento[]
+  vendedores       Usuario[]
+  criadoEm         DateTime        @default(now())
+  custos           CustoIA[]
+  monitoramento    Monitoramento[]
+}
+
+enum Tom {
+  PROFISSIONAL
+  CASUAL
+  FORMAL
+  AMIGAVEL
+}
+
+model Documento {
+  id       String   @id @default(uuid())
+  nome     String
+  path     String
+  tamanho  Int
+  agenteId String
+  agente   Agente   @relation(fields: [agenteId], references: [id], onDelete: Cascade)
+  criadoEm DateTime @default(now())
+}
+
+model Monitoramento {
+  id               String         @id @default(uuid())
+  usuarioId        String
+  usuario          Usuario        @relation(fields: [usuarioId], references: [id])
+  agenteId         String
+  agente           Agente         @relation(fields: [agenteId], references: [id])
+  campanha         String
+  telefone         String
+  mensagemOriginal String         @db.Text
+  respostaIA       String         @db.Text
+  statusResposta   StatusResposta @default(SUGESTAO)
+  criadoEm         DateTime       @default(now())
+}
+
+enum StatusResposta {
+  SUGESTAO
+  AUTO_RESPOSTA
+  EDITADA
+  IGNORADA
+}
+
+model CustoIA {
+  id           String   @id @default(uuid())
+  usuarioId    String
+  usuario      Usuario  @relation(fields: [usuarioId], references: [id])
+  agenteId     String?
+  agente       Agente?  @relation(fields: [agenteId], references: [id])
+  modelo       String
+  provider     String
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  custoUsd     Float    @default(0)
+  duracao      Int      @default(0)
+  criadoEm     DateTime @default(now())
+}
+
+model LogAtividade {
+  id            String    @id @default(uuid())
+  usuarioId     String
+  usuario       Usuario   @relation(fields: [usuarioId], references: [id])
+  evento        EventoLog
+  ip            String?
+  duracaoSessao Int?
+  criadoEm      DateTime  @default(now())
+}
+
+enum EventoLog {
+  CONECTOU
+  DESCONECTOU
+  ERRO
+}
+
+model ErroSistema {
+  id         String     @id @default(uuid())
+  severidade Severidade
+  categoria  String
+  mensagem   String     @db.Text
+  usuarioId  String?
+  origem     String?
+  criadoEm   DateTime   @default(now())
+}
+
+enum Severidade {
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+model OrientacaoGlobal {
+  id           String   @id @default(uuid())
+  conteudo     String   @db.Text
+  atualizadoEm DateTime @updatedAt
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  criadoEm  DateTime @default(now())
+}
+
