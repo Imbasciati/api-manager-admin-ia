@@ -1,0 +1,78 @@
+# =============================================================================
+# docker-compose.ci.yml — Simula o fluxo CI/CD (Build → Deploy) localmente
+# =============================================================================
+# Espelha o que acontece no GitHub Actions + K8s:
+#   - Imagem buildada e tagueada como <registry>/<repo>:<tag>
+#   - Tag: YYYYMMDD_<N> (mesmo formato do workflow dev.yml)
+#   - NODE_ENV=production (igual ao pod)
+#   - PostgreSQL local para simular o banco de dev
+#
+# Variáveis de ambiente necessárias (exportar antes ou prefixar o comando):
+#   GENERAL_TAG   — gerada automaticamente por `just ci-build` se omitida
+#   IMAGE_LOCAL   — gerada automaticamente por `just ci-build` se omitida
+#
+# Uso via justfile:
+#   just ci-build   → builda e taga a imagem (simula o job Build)
+#   just ci-up      → sobe containers com a imagem tagueada (simula o Deploy)
+#   just ci-run     → ci-build + ci-up em sequência
+#   just ci-down    → para sem destruir volumes
+#   just ci-reset   → para e destrói volumes
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — banco local de CI (mesmo do compose local)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: beta-admin-ia-postgres-ci
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: beta_admin_ia
+      POSTGRES_USER: beta_user
+      POSTGRES_PASSWORD: beta_pass
+    ports:
+      - '5443:5432'
+    volumes:
+      - postgres_ci_data:/var/lib/postgresql/data
+    networks:
+      - beta-admin-ia-ci-network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U beta_user -d beta_admin_ia']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # API — imagem pré-buildada com tag (sem build: aqui, igual ao K8s)
+  # A variável IMAGE_LOCAL é injetada pelo justfile (ci-build / ci-up)
+  # ---------------------------------------------------------------------------
+  api:
+    image: ${IMAGE_LOCAL}
+    container_name: beta-admin-ia-api-ci
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    ports:
+      - '3002:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - beta-admin-ia-ci-network
+    healthcheck:
+      test: ['CMD-SHELL', 'wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres_ci_data:
+    name: beta-admin-ia-postgres-ci-data
+
+networks:
+  beta-admin-ia-ci-network:
+    name: beta-admin-ia-ci-network

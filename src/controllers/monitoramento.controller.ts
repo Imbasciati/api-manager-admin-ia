@@ -1,4 +1,5 @@
-﻿import { Request, Response } from "express";
+
+import { Request, Response } from "express";
 import { StatusResposta } from "@prisma/client";
 import { prisma } from "../prisma/client";
 import { asyncHandler } from "../utils/asyncHandler";

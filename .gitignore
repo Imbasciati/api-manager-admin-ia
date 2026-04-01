@@ -1,7 +1,12 @@
-
+node_modules
 dist
 .env
+.env.local
 uploads
+.claude
+.clauderules
+CLAUDE.md
+CLAUDE.local.md
 
 # Prisma
 prisma/generated
@@ -18,5 +23,3 @@ Thumbs.db
 # Editor
 .vscode/settings.json
 .idea
-# Node.js
-node_modules/

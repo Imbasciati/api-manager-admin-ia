@@ -1,0 +1,74 @@
+# =============================================================================
+# docker-compose.local.yml — Ambiente local de desenvolvimento
+# =============================================================================
+# Replica o comportamento do pod K8s localmente:
+#   - Build compilado via Dockerfile (mesmo usado em prod/k8s)
+#   - NODE_ENV=development
+#   - PostgreSQL 16 local (substitui Supabase em local)
+#
+# Uso:
+#   docker compose -f docker-compose.local.yml up -d --build
+#   docker compose -f docker-compose.local.yml logs -f api
+#   docker compose -f docker-compose.local.yml down          # para sem destruir volumes
+#   docker compose -f docker-compose.local.yml down -v       # destrói volumes
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — banco local (substitui Supabase em dev)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: beta-admin-ia-postgres-local
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: beta_admin_ia
+      POSTGRES_USER: beta_user
+      POSTGRES_PASSWORD: beta_pass
+    ports:
+      - '5442:5432'
+    volumes:
+      - postgres_local_data:/var/lib/postgresql/data
+    networks:
+      - beta-admin-ia-local-network
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U beta_user -d beta_admin_ia']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # API — build de produção, sem volume mount, sem hot reload
+  # Mesma imagem usada em prod/K8s
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: beta-admin-ia-api-local
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - beta-admin-ia-local-network
+    healthcheck:
+      test: ['CMD-SHELL', 'wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres_local_data:
+    name: beta-admin-ia-postgres-local-data
+
+networks:
+  beta-admin-ia-local-network:
+    name: beta-admin-ia-local-network

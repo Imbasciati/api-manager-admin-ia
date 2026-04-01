@@ -1,0 +1,2 @@
+export GENERAL_TAG=20260325_1
+export IMAGE_LOCAL=cursobeta-local/api-manager-admin-ia:20260325_1

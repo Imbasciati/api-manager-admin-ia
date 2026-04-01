@@ -1,5 +1,5 @@
 # ─── Stage 1: Build ───────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ RUN npm run build
 
 
 # ─── Stage 2: Production ──────────────────────────────────────────────────────
-FROM node:20-alpine AS production
+FROM node:24-alpine AS production
 
 WORKDIR /app
 
@@ -25,18 +25,22 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Prisma: client gerado + CLI para rodar migrations
+# Prisma: generated client + CLI for running migrations
 COPY --from=builder /app/node_modules/.prisma         ./node_modules/.prisma
 COPY --from=builder /app/node_modules/prisma          ./node_modules/prisma
 COPY --from=builder /app/node_modules/.bin/prisma     ./node_modules/.bin/prisma
 
-# Schema e migrations
+# Schema and migrations
 COPY prisma/ ./prisma/
 
-# Aplicação compilada
+# Compiled app
 COPY --from=builder /app/dist ./dist
 
-# Pasta de uploads
+# Startup script: migrate then start app
+COPY migrate-and-start-dev.sh ./migrate-and-start-dev.sh
+RUN chmod +x ./migrate-and-start-dev.sh
+
+# Uploads directory
 RUN mkdir -p uploads
 
 EXPOSE 3001
