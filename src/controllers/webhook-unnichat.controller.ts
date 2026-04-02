@@ -4,6 +4,7 @@ import { chatWithAgentHistory, type HistoricoMensagem } from "../services/ia.ser
 import { enviarMensagem } from "../services/unnichat.service";
 import { broadcast } from "../services/sse.service";
 import { addMessage, getPendingMessages, markProcessed, scheduleProcessing } from "../services/message-buffer.service";
+import { splitMessageBlocks, calcMessageDelay, sleep } from "../utils/message-format";
 
 /**
  * Contexto em memória por contactId — guarda agente, telefone e nome
@@ -284,8 +285,15 @@ async function processarLoteMensagens(params: {
     update: { historico: novoHistorico },
   });
 
-  // 8. Envia resposta de volta ao Unnichat
-  await enviarMensagem(agente.unnichatApiKey!, telefone, respostaIA);
+  // 8. Envia resposta ao Unnichat em blocos separados com delay humanizado
+  //    \n\n na resposta da IA = nova mensagem | \n = quebra de linha na mesma mensagem
+  const blocos = splitMessageBlocks(respostaIA);
+  for (let i = 0; i < blocos.length; i++) {
+    await enviarMensagem(agente.unnichatApiKey!, telefone, blocos[i]);
+    if (i < blocos.length - 1) {
+      await sleep(calcMessageDelay(blocos[i]));
+    }
+  }
 
   // 9. Marca todas as mensagens do buffer como processadas
   await markProcessed(mensagensBuffer.map((m) => m.id));

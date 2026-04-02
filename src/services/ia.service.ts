@@ -61,7 +61,7 @@ async function chatOpenAI(
   imagemBase64?: string,
   imagemMimeType?: string,
 ): Promise<string> {
-  const systemPrompt = buildSystemPrompt(config);
+  const systemPrompt = await buildSystemPrompt(config);
 
   // Conteúdo do usuário: texto simples ou multimodal (texto + imagem)
   const userContent: unknown = imagemBase64
@@ -94,7 +94,7 @@ async function chatAnthropic(
   mensagem: string,
   apiKey: string,
 ): Promise<string> {
-  const systemPrompt = buildSystemPrompt(config);
+  const systemPrompt = await buildSystemPrompt(config);
 
   const response = await axios.post(
     "https://api.anthropic.com/v1/messages",
@@ -119,7 +119,7 @@ async function chatAnthropic(
 
 /** ── Google Gemini ──────────────────────────────────────────────────────── */
 async function chatGemini(config: AgentConfig, mensagem: string, apiKey: string): Promise<string> {
-  const systemPrompt = buildSystemPrompt(config);
+  const systemPrompt = await buildSystemPrompt(config);
 
   const response = await axios.post(
     `https://generativelanguage.googleapis.com/v1beta/models/${config.modelo}:generateContent?key=${apiKey}`,
@@ -139,8 +139,18 @@ async function chatGemini(config: AgentConfig, mensagem: string, apiKey: string)
   );
 }
 
-function buildSystemPrompt(config: AgentConfig): string {
-  return `${config.promptSistema}\n\nContexto de produtos:\n${config.contextoProdutos ?? "Sem contexto adicional."}`;
+async function buildSystemPrompt(config: AgentConfig): Promise<string> {
+  const orientacao = await prisma.orientacaoGlobal.findFirst();
+  const partes: string[] = [];
+
+  if (orientacao?.conteudo?.trim()) {
+    partes.push(orientacao.conteudo.trim());
+  }
+
+  partes.push(config.promptSistema);
+  partes.push(`Contexto de produtos:\n${config.contextoProdutos ?? "Sem contexto adicional."}`);
+
+  return partes.join("\n\n");
 }
 
 export type HistoricoMensagem = { role: "user" | "assistant"; content: string };
@@ -156,7 +166,7 @@ export const chatWithAgentHistory = async (
 ): Promise<string> => {
   const provider = detectarProvider(config.modelo);
   const apiKey = await getApiKey(provider);
-  const systemPrompt = buildSystemPrompt(config);
+  const systemPrompt = await buildSystemPrompt(config);
 
   if (provider === "anthropic") {
     const messages = [

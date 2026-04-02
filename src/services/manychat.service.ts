@@ -1,5 +1,6 @@
 import axios from "axios";
 import { getConfig } from "./agente-config.service";
+import { splitMessageBlocks, calcMessageDelay, sleep } from "../utils/message-format";
 
 const BASE = "https://api.manychat.com";
 
@@ -36,19 +37,14 @@ async function triggerFlow(subscriberId: string, flowNs: string): Promise<void> 
   );
 }
 
-function calcDelay(text: string): number {
-  const ms = (text.length / 30) * 1000; // 30 chars/s
-  return Math.min(8000, Math.max(3000, ms));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
- * Divide o texto em blocos (parágrafos) e envia cada um via ManyChat,
- * gravando no campo MANYCHAT_FIELD_RESPONSE e acionando MANYCHAT_FLOW_NS,
- * com delay humanizado entre blocos.
+ * Divide o texto em blocos usando a lógica compartilhada de formatação e envia
+ * cada um via ManyChat, gravando no campo MANYCHAT_FIELD_RESPONSE e acionando
+ * MANYCHAT_FLOW_NS, com delay humanizado entre blocos.
+ *
+ * Regras de estruturação da IA:
+ * - \n  → quebra de linha dentro da mesma mensagem
+ * - \n\n → nova mensagem separada (nenhum desses marcadores chega ao lead)
  */
 export async function sendBlocks(subscriberId: string, text: string): Promise<void> {
   const [fieldId, flowNs] = await Promise.all([
@@ -62,15 +58,12 @@ export async function sendBlocks(subscriberId: string, text: string): Promise<vo
     );
   }
 
-  const blocks = text
-    .split(/\n\n+/)
-    .map((b) => b.trim())
-    .filter((b) => b.length > 0);
+  const blocks = splitMessageBlocks(text);
 
   for (const block of blocks) {
     await setField(subscriberId, fieldId, block);
     await triggerFlow(subscriberId, flowNs);
-    await sleep(calcDelay(block));
+    await sleep(calcMessageDelay(block));
   }
 }
 

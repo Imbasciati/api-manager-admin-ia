@@ -1,7 +1,8 @@
 import { chat } from "../services/openai.service";
+import { prisma } from "../prisma/client";
 import type { ChatMessage, ChatResult } from "../types/agent.types";
 
-const SYSTEM_PROMPT = `Você é Roberta, especialista em vendas consultivas.
+const AGENT_PROMPT = `Você é Roberta, especialista em vendas consultivas.
 
 Personalidade:
 - Comunicativa, empática e profissional
@@ -22,12 +23,26 @@ Formato:
 - Evite listas longas; prefira texto natural e conversacional
 - Use emojis com moderação quando o contexto permitir`;
 
+async function buildPrompt(): Promise<string> {
+  const orientacao = await prisma.orientacaoGlobal.findFirst();
+  const partes: string[] = [];
+
+  if (orientacao?.conteudo?.trim()) {
+    partes.push(orientacao.conteudo.trim());
+  }
+
+  partes.push(AGENT_PROMPT);
+  return partes.join("\n\n");
+}
+
 export async function respond(
   userMessage: string,
   memory: ChatMessage[],
 ): Promise<ChatResult> {
+  const systemPrompt = await buildPrompt();
+
   const messages: ChatMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     ...memory,
     { role: "user", content: userMessage },
   ];

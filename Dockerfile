@@ -45,4 +45,4 @@ RUN mkdir -p uploads
 
 EXPOSE 3001
 
-CMD ["node", "dist/app.js"]
+CMD ["sh", "./migrate-and-start-dev.sh"]
