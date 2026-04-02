@@ -3,8 +3,20 @@ import { prisma } from "../prisma/client";
 import { chatWithAgentHistory, type HistoricoMensagem } from "../services/ia.service";
 import { enviarMensagem } from "../services/unnichat.service";
 import { broadcast } from "../services/sse.service";
-import { addMessage, getPendingMessages, markProcessed, scheduleProcessing } from "../services/message-buffer.service";
+import { addMessage, getPendingMessages, markProcessed, scheduleProcessing, updateTranscricao } from "../services/message-buffer.service";
 import { splitMessageBlocks, calcMessageDelay, sleep } from "../utils/message-format";
+import { transcribeAudio, analyzeImage } from "../services/openai.service";
+
+type MidiaTipo = "text" | "audio" | "image";
+
+interface PayloadExtraido {
+  contactId: string;
+  telefone: string;
+  nome: string | null;
+  texto: string;       // texto da mensagem (vazio para áudio/imagem puro)
+  tipo: MidiaTipo;
+  mediaUrl?: string;   // URL da mídia quando tipo = audio | image
+}
 
 /**
  * Contexto em memória por contactId — guarda agente, telefone e nome
@@ -17,64 +29,113 @@ const pendingContexts = new Map<string, {
 }>();
 
 /**
+ * Detecta o tipo de mídia a partir de uma string de tipo vinda do Unnichat.
+ * Vários valores possíveis (audio, voice, ptt, image, photo, sticker…).
+ */
+function detectarTipo(raw?: string): MidiaTipo {
+  if (!raw) return "text";
+  const t = raw.toLowerCase();
+  if (t === "audio" || t === "voice" || t === "ptt") return "audio";
+  if (t === "image" || t === "photo" || t === "sticker") return "image";
+  return "text";
+}
+
+/**
  * Extrai os campos relevantes do payload enviado pelo Unnichat.
- *
- * Formatos suportados:
+ * Suporta mensagens de texto, áudio e imagem nos 3 formatos conhecidos.
  *
  * 1. Formato Unnichat Automação (data wrapper):
- * { "data": { "id": "...", "name": "...", "phoneNumber": "...", "message": "..." } }
+ *    { "data": { "phoneNumber": "...", "name": "...", "message": "...", "type": "audio" } }
  *
  * 2. Formato padrão com objetos aninhados:
- * { "contact": { "id": "...", "phone": "...", "name": "..." },
- *   "message": { "id": "...", "text": "...", "type": "text" } }
+ *    { "contact": { ... }, "message": { "type": "audio", "url": "...", "text": "" } }
  *
  * 3. Formato simplificado / plano:
- * { "phone": "...", "name": "...", "message": "..." }
+ *    { "phone": "...", "name": "...", "message": "...", "type": "audio" }
  */
-function extrairPayload(body: Record<string, unknown>) {
-  // ── Formato 1: Unnichat Automação { data: { phoneNumber, name, ... } } ──────
+function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
+  // ── Formato 1: Unnichat Automação { data: { phoneNumber, ... } } ──────────────
   if (body.data && typeof body.data === "object") {
     const d = body.data as Record<string, unknown>;
     const phone = String(d.phoneNumber ?? d.phone ?? d.telefone ?? "");
-    if (phone) {
-      const field = (d.field && typeof d.field === "object") ? d.field as Record<string, unknown> : {};
-      const texto = String(
-        d.message ?? d.text ?? d.mensagem ??
-        field.message ?? field.text ?? field.mensagem ?? ""
-      ).trim();
+    if (!phone) return null;
 
-      return {
-        contactId: String(d.id ?? phone),
-        telefone: normalizePhone(phone),
-        nome: d.name ? String(d.name) : null,
-        texto,
-      };
-    }
+    const field = (d.field && typeof d.field === "object") ? d.field as Record<string, unknown> : {};
+    const tipo = detectarTipo(String(d.type ?? field.type ?? ""));
+
+    // Tenta extrair texto e URL de vários campos possíveis
+    const rawContent = String(
+      d.message ?? d.text ?? d.mensagem ??
+      field.message ?? field.text ?? field.mensagem ?? ""
+    ).trim();
+
+    // Para áudio/imagem, o rawContent normalmente É a URL da mídia
+    const mediaUrl = tipo !== "text"
+      ? (String(d.mediaUrl ?? d.url ?? d.media ?? rawContent)).trim() || undefined
+      : undefined;
+
+    const texto = tipo === "text" ? rawContent : "";
+
+    // Rejeita se não tem nem texto nem URL de mídia
+    if (!texto && !mediaUrl) return null;
+
+    return {
+      contactId: String(d.id ?? phone),
+      telefone: normalizePhone(phone),
+      nome: d.name ? String(d.name) : null,
+      texto,
+      tipo,
+      mediaUrl,
+    };
   }
 
   // ── Formato 2: { contact, message } ──────────────────────────────────────────
   if (body.contact && body.message) {
     const contact = body.contact as Record<string, string>;
     const message = body.message as Record<string, string>;
-    const texto = (message.text ?? message.conversation ?? message.body ?? "").trim();
-    const tipo = message.type ?? "text";
-    if (tipo !== "text" && !texto) return null;
+    const tipo = detectarTipo(message.type);
+
+    const texto = tipo === "text"
+      ? (message.text ?? message.conversation ?? message.body ?? "").trim()
+      : "";
+
+    // URL da mídia pode estar em vários campos dependendo da versão do Unnichat
+    const mediaUrl = tipo !== "text"
+      ? (message.url ?? message.mediaUrl ?? message.body ?? message.text ?? "").trim() || undefined
+      : undefined;
+
+    if (!texto && !mediaUrl) return null;
+
     return {
       contactId: contact.id ?? contact.phone ?? "",
       telefone: normalizePhone(contact.phone ?? ""),
       nome: contact.name ?? contact.pushName ?? null,
       texto,
+      tipo,
+      mediaUrl,
     };
   }
 
   // ── Formato 3: plano ──────────────────────────────────────────────────────────
   if (body.phone || body.telefone) {
-    const texto = String(body.message ?? body.mensagem ?? body.text ?? "").trim();
+    const tipo = detectarTipo(String(body.type ?? ""));
+    const rawContent = String(body.message ?? body.mensagem ?? body.text ?? "").trim();
+
+    const mediaUrl = tipo !== "text"
+      ? (String(body.mediaUrl ?? body.url ?? body.media ?? rawContent)).trim() || undefined
+      : undefined;
+
+    const texto = tipo === "text" ? rawContent : "";
+
+    if (!texto && !mediaUrl) return null;
+
     return {
       contactId: String(body.contactId ?? body.phone ?? body.telefone ?? ""),
       telefone: normalizePhone(String(body.phone ?? body.telefone ?? "")),
       nome: body.name ? String(body.name) : null,
       texto,
+      tipo,
+      mediaUrl,
     };
   }
 
@@ -88,17 +149,18 @@ function normalizePhone(phone: string): string {
   return digits.startsWith("55") ? digits : `55${digits}`;
 }
 
+/** Texto legível para exibir na UI enquanto a transcrição/análise não está pronta. */
+function placeholderMidia(tipo: MidiaTipo): string {
+  if (tipo === "audio") return "🎵 [Áudio recebido — aguardando transcrição]";
+  if (tipo === "image") return "🖼️ [Imagem recebida — aguardando análise]";
+  return "";
+}
+
 /**
  * POST /api/webhook/unnichat/:agenteId
  *
  * Recebe mensagem do Unnichat → enfileira no buffer → aguarda debounce →
- * combina sequência de mensagens → responde via IA → envia via Unnichat API.
- *
- * O debounce garante que rajadas de mensagens enviadas em sequência rápida
- * (ex: "Oi" + "Bom dia" + "Tudo bem?") sejam tratadas como um único bloco,
- * enquanto mensagens enviadas com intervalo maior são tratadas separadamente.
- *
- * Endpoint público (sem JWT) — autenticado pelo agenteId na URL.
+ * combina sequência de mensagens (transcrevendo áudio/imagens) → responde via IA.
  */
 export async function receberMensagemUnnichat(req: Request, res: Response) {
   const agenteId = String(req.params.agenteId);
@@ -116,25 +178,25 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
     return res.status(500).json({ error: "API Key Unnichat não configurada" });
   }
 
-  // 2. Extrai dados do payload
+  // 2. Extrai dados do payload (texto OU mídia)
   const payload = extrairPayload(req.body as Record<string, unknown>);
-  if (!payload || !payload.texto) {
-    return res.status(200).json({ ok: true, ignorado: true, motivo: "Payload sem texto" });
+  if (!payload) {
+    return res.status(200).json({ ok: true, ignorado: true, motivo: "Payload sem conteúdo" });
   }
 
-  const { contactId, telefone, nome, texto } = payload;
+  const { contactId, telefone, nome, texto, tipo, mediaUrl } = payload;
 
   // 3. Responde imediatamente ao Unnichat (evita timeout/retry)
   res.status(200).json({ ok: true, recebido: true, fila: true });
 
-  // 4. Salva mensagem do cliente IMEDIATAMENTE (aparece na UI sem esperar debounce)
-  //    e agenda o processamento da IA com debounce
+  // 4. Enfileira e agenda processamento
   void (async () => {
     try {
-      // Adiciona ao buffer de mensagens (para combinar no lote da IA)
-      await addMessage(contactId, "text", texto);
+      // Conteúdo salvo no buffer: texto puro ou a URL da mídia (será transcrita depois)
+      const conteudoBuffer = tipo === "text" ? texto : (mediaUrl ?? texto);
+      await addMessage(contactId, tipo, conteudoBuffer, mediaUrl);
 
-      // Atualiza contexto em memória (preserva nome se já conhecido)
+      // Atualiza contexto em memória
       const ctxAnterior = pendingContexts.get(contactId);
       pendingContexts.set(contactId, {
         agenteId: agente.id,
@@ -142,7 +204,7 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
         nome: nome ?? ctxAnterior?.nome ?? null,
       });
 
-      // Cria ou recupera o atendimento agora (não espera o debounce)
+      // Cria ou recupera o atendimento imediatamente (não espera debounce)
       let atendimento = await prisma.atendimento.findFirst({
         where: { telefone, canal: "unnichat", status: { not: "FINALIZADO" } },
       });
@@ -166,12 +228,14 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
         });
       }
 
-      // Salva mensagem do cliente no atendimento e transmite via SSE imediatamente
+      // Salva mensagem do cliente na UI imediatamente
+      // Para mídia: mostra placeholder legível (não a URL bruta)
+      const conteudoUI = tipo === "text" ? texto : placeholderMidia(tipo);
       const msgCliente = await prisma.mensagemAtendimento.create({
         data: {
           atendimentoId: atendimento.id,
           origem: "CLIENTE",
-          conteudo: texto,
+          conteudo: conteudoUI,
         },
       });
       await prisma.atendimento.update({
@@ -180,8 +244,7 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
       });
       broadcast("nova_mensagem", { atendimentoId: atendimento.id, mensagem: msgCliente });
 
-      // Agenda processamento da IA com debounce — mensagens rápidas em sequência
-      // serão combinadas em um único bloco antes de chamar a IA
+      // Agenda processamento da IA com debounce
       scheduleProcessing(contactId, async (cId) => {
         const ctx = pendingContexts.get(cId);
         if (!ctx) return;
@@ -204,7 +267,7 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
 
 /**
  * Processa todas as mensagens pendentes no buffer para um contactId.
- * Combina os textos em ordem, chama a IA uma única vez e responde.
+ * Transcreve áudio e analisa imagens antes de enviar para a IA.
  */
 async function processarLoteMensagens(params: {
   agente: {
@@ -221,23 +284,74 @@ async function processarLoteMensagens(params: {
   telefone: string;
   nome: string | null;
 }) {
-  const { agente, contactId, telefone, nome } = params;
+  const { agente, contactId, telefone } = params;
 
   // 1. Busca todas as mensagens pendentes no buffer (em ordem de chegada)
   const mensagensBuffer = await getPendingMessages(contactId);
   if (mensagensBuffer.length === 0) return;
 
-  // 2. Recupera o Atendimento (já foi criado no momento do recebimento)
+  // 2. Recupera o atendimento
   const atendimento = await prisma.atendimento.findFirst({
     where: { telefone, canal: "unnichat", status: { not: "FINALIZADO" } },
   });
-
-  // Se por algum motivo o atendimento não existir, aborta silenciosamente
   if (!atendimento) return;
 
-  // 3. Combina todos os textos pendentes em ordem (separados por nova linha)
-  //    As mensagens do cliente já foram salvas no DB no momento do recebimento
-  const textosCombinados = mensagensBuffer.map((m) => m.conteudo).join("\n");
+  // 3. Resolve cada mensagem: transcreve áudio, descreve imagens, mantém texto puro
+  const textosResolvidos: string[] = [];
+
+  for (const msg of mensagensBuffer) {
+    let textoFinal = msg.conteudo;
+
+    if (msg.tipo === "audio" && msg.mediaUrl) {
+      try {
+        console.log(`[UNNICHAT] Transcrevendo áudio: ${msg.mediaUrl}`);
+        textoFinal = await transcribeAudio(msg.mediaUrl);
+        await updateTranscricao(msg.id, textoFinal);
+
+        // Atualiza o registro de UI com a transcrição real
+        await prisma.mensagemAtendimento.updateMany({
+          where: {
+            atendimentoId: atendimento.id,
+            origem: "CLIENTE",
+            conteudo: placeholderMidia("audio"),
+          },
+          data: { conteudo: `🎵 [Áudio] ${textoFinal}` },
+        });
+      } catch (err) {
+        console.error("[UNNICHAT] Falha ao transcrever áudio:", err instanceof Error ? err.message : err);
+        textoFinal = "[O cliente enviou um áudio que não foi possível transcrever]";
+      }
+    } else if (msg.tipo === "image" && msg.mediaUrl) {
+      try {
+        console.log(`[UNNICHAT] Analisando imagem: ${msg.mediaUrl}`);
+        textoFinal = await analyzeImage(msg.mediaUrl);
+        await updateTranscricao(msg.id, textoFinal);
+
+        // Atualiza o registro de UI com a descrição real
+        await prisma.mensagemAtendimento.updateMany({
+          where: {
+            atendimentoId: atendimento.id,
+            origem: "CLIENTE",
+            conteudo: placeholderMidia("image"),
+          },
+          data: { conteudo: `🖼️ [Imagem] ${textoFinal}` },
+        });
+      } catch (err) {
+        console.error("[UNNICHAT] Falha ao analisar imagem:", err instanceof Error ? err.message : err);
+        textoFinal = "[O cliente enviou uma imagem que não foi possível analisar]";
+      }
+    }
+
+    if (textoFinal.trim()) {
+      textosResolvidos.push(textoFinal.trim());
+    }
+  }
+
+  const textosCombinados = textosResolvidos.join("\n");
+  if (!textosCombinados.trim()) {
+    await markProcessed(mensagensBuffer.map((m) => m.id));
+    return;
+  }
 
   // 4. Carrega histórico contextual da conversa
   const memoria = await prisma.conversationMemory.findUnique({ where: { contactId } });
@@ -245,7 +359,7 @@ async function processarLoteMensagens(params: {
     ? (memoria!.historico as HistoricoMensagem[])
     : [];
 
-  // 5. Chama a IA com o bloco combinado de mensagens
+  // 5. Chama a IA com o bloco combinado e resolvido
   const respostaIA = await chatWithAgentHistory(
     {
       modelo: agente.modelo,
@@ -286,7 +400,6 @@ async function processarLoteMensagens(params: {
   });
 
   // 8. Envia resposta ao Unnichat em blocos separados com delay humanizado
-  //    \n\n na resposta da IA = nova mensagem | \n = quebra de linha na mesma mensagem
   const blocos = splitMessageBlocks(respostaIA);
   for (let i = 0; i < blocos.length; i++) {
     await enviarMensagem(agente.unnichatApiKey!, telefone, blocos[i]);
