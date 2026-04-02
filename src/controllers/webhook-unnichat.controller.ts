@@ -29,14 +29,37 @@ const pendingContexts = new Map<string, {
 }>();
 
 /**
- * Detecta o tipo de mídia a partir de uma string de tipo vinda do Unnichat.
+ * Detecta o tipo de mídia a partir do campo `type` do Unnichat.
  * Vários valores possíveis (audio, voice, ptt, image, photo, sticker…).
  */
-function detectarTipo(raw?: string): MidiaTipo {
-  if (!raw) return "text";
+function detectarTipoPorCampo(raw?: string): MidiaTipo | null {
+  if (!raw) return null;
   const t = raw.toLowerCase();
   if (t === "audio" || t === "voice" || t === "ptt") return "audio";
   if (t === "image" || t === "photo" || t === "sticker") return "image";
+  if (t === "text" || t === "chat") return "text";
+  return null;
+}
+
+/**
+ * Detecta o tipo de mídia pela extensão da URL — usado como fallback quando
+ * o campo `type` não está presente ou não é reconhecido.
+ */
+function detectarTipoPorUrl(url: string): MidiaTipo {
+  const clean = url.split("?")[0].toLowerCase();
+  if (/\.(ogg|mp3|wav|m4a|aac|opus|oga|mp4a)$/.test(clean)) return "audio";
+  if (/\.(jpg|jpeg|png|gif|webp|bmp|svg|heic|heif)$/.test(clean)) return "image";
+  return "text";
+}
+
+/**
+ * Resolve o tipo final: campo `type` tem prioridade; fallback para extensão da URL.
+ * Se nenhum indicador encontrado, assume "text".
+ */
+function detectarTipo(rawTipo?: string, url?: string): MidiaTipo {
+  const porCampo = detectarTipoPorCampo(rawTipo);
+  if (porCampo) return porCampo;
+  if (url) return detectarTipoPorUrl(url);
   return "text";
 }
 
@@ -61,7 +84,6 @@ function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
     if (!phone) return null;
 
     const field = (d.field && typeof d.field === "object") ? d.field as Record<string, unknown> : {};
-    const tipo = detectarTipo(String(d.type ?? field.type ?? ""));
 
     // Tenta extrair texto e URL de vários campos possíveis
     const rawContent = String(
@@ -69,10 +91,13 @@ function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
       field.message ?? field.text ?? field.mensagem ?? ""
     ).trim();
 
-    // Para áudio/imagem, o rawContent normalmente É a URL da mídia
-    const mediaUrl = tipo !== "text"
-      ? (String(d.mediaUrl ?? d.url ?? d.media ?? rawContent)).trim() || undefined
-      : undefined;
+    // URL explícita de mídia tem prioridade; fallback para rawContent (Unnichat às vezes coloca a URL no campo message)
+    const rawMediaUrl = String(d.mediaUrl ?? d.url ?? d.media ?? "").trim() || rawContent;
+
+    // Detecta tipo: campo type primeiro, depois extensão da URL como fallback
+    const tipo = detectarTipo(String(d.type ?? field.type ?? ""), rawMediaUrl);
+
+    const mediaUrl = tipo !== "text" ? rawMediaUrl || undefined : undefined;
 
     const texto = tipo === "text" ? rawContent : "";
 
@@ -93,16 +118,17 @@ function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
   if (body.contact && body.message) {
     const contact = body.contact as Record<string, string>;
     const message = body.message as Record<string, string>;
-    const tipo = detectarTipo(message.type);
+
+    // URL da mídia pode estar em vários campos dependendo da versão do Unnichat
+    const rawMediaUrl = (message.url ?? message.mediaUrl ?? message.body ?? message.text ?? "").trim();
+
+    const tipo = detectarTipo(message.type, rawMediaUrl);
 
     const texto = tipo === "text"
       ? (message.text ?? message.conversation ?? message.body ?? "").trim()
       : "";
 
-    // URL da mídia pode estar em vários campos dependendo da versão do Unnichat
-    const mediaUrl = tipo !== "text"
-      ? (message.url ?? message.mediaUrl ?? message.body ?? message.text ?? "").trim() || undefined
-      : undefined;
+    const mediaUrl = tipo !== "text" ? rawMediaUrl || undefined : undefined;
 
     if (!texto && !mediaUrl) return null;
 
@@ -118,13 +144,12 @@ function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
 
   // ── Formato 3: plano ──────────────────────────────────────────────────────────
   if (body.phone || body.telefone) {
-    const tipo = detectarTipo(String(body.type ?? ""));
     const rawContent = String(body.message ?? body.mensagem ?? body.text ?? "").trim();
+    const rawMediaUrl = String(body.mediaUrl ?? body.url ?? body.media ?? rawContent).trim();
 
-    const mediaUrl = tipo !== "text"
-      ? (String(body.mediaUrl ?? body.url ?? body.media ?? rawContent)).trim() || undefined
-      : undefined;
+    const tipo = detectarTipo(String(body.type ?? ""), rawMediaUrl);
 
+    const mediaUrl = tipo !== "text" ? rawMediaUrl || undefined : undefined;
     const texto = tipo === "text" ? rawContent : "";
 
     if (!texto && !mediaUrl) return null;
@@ -184,7 +209,11 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
     return res.status(200).json({ ok: true, ignorado: true, motivo: "Payload sem conteúdo" });
   }
 
-  const { contactId, telefone, nome, texto, tipo, mediaUrl } = payload;
+  const { telefone, nome, texto, tipo, mediaUrl } = payload;
+
+  // Namespacing por agente: garante isolamento total de memória e buffer entre agentes.
+  // O mesmo número de telefone pode falar com agentes diferentes sem cruzar histórico.
+  const contactId = `${agenteId}:${payload.contactId}`;
 
   // 3. Responde imediatamente ao Unnichat (evita timeout/retry)
   res.status(200).json({ ok: true, recebido: true, fila: true });
