@@ -75,8 +75,10 @@ export const usoMetricas = asyncHandler(async (req: Request, res: Response) => {
   if (criadoEm) atendWhere.criadoEm = criadoEm;
   if (agenteId) atendWhere.agenteId = agenteId;
 
+  // Filtro de mensagens: filtra pelo atendimento relacionado (agenteId via relação)
   const msgWhere: Record<string, unknown> = {};
   if (criadoEm) msgWhere.criadoEm = criadoEm;
+  if (agenteId) msgWhere.atendimento = { agenteId };
 
   const [execAgg, execErros, totalAtend, atendStatus, msgStats, atendDuracoes] = await Promise.all([
     prisma.agentExecution.aggregate({
@@ -168,40 +170,44 @@ export const usoPorDia = asyncHandler(async (req: Request, res: Response) => {
 
 // ── Qualidade por agente ─────────────────────────────────────────────────────
 // Score 0–100: 50% confiabilidade (sem erros) + 30% velocidade (SLA) + 20% profundidade (interações por contato)
+// Usa $queryRaw para evitar dependência dos tipos Prisma gerados (compatível com qualquer versão do cliente)
+
+interface QualidadeRow {
+  agenteId:            string | null;
+  total_execucoes:     bigint;
+  avg_duracao:         number | null;
+  total_erros:         bigint;
+  contatos_unicos:     bigint;
+  media_interacoes:    number;
+}
 
 export const usoQualidade = asyncHandler(async (req: Request, res: Response) => {
   const criadoEm = filtroData(req);
-  const where: Record<string, unknown> = criadoEm ? { criadoEm } : {};
 
-  const [rows, erroRows, contactGroups] = await Promise.all([
-    prisma.agentExecution.groupBy({
-      by:    ["agenteId"],
-      where,
-      _count: { _all: true },
-      _avg:   { duracao: true },
-    }),
-    prisma.agentExecution.groupBy({
-      by:    ["agenteId"],
-      where: { ...where, erro: { not: null } },
-      _count: { _all: true },
-    }),
-    prisma.agentExecution.groupBy({
-      by:    ["agenteId", "contactId"],
-      where,
-      _count: { _all: true },
-    }),
-  ]);
+  // Monta cláusulas WHERE dinâmicas
+  const conds: Prisma.Sql[] = [];
+  if (criadoEm?.gte) conds.push(Prisma.sql`ae."criadoEm" >= ${criadoEm.gte}`);
+  if (criadoEm?.lte) conds.push(Prisma.sql`ae."criadoEm" <= ${criadoEm.lte}`);
+  const whereClause = conds.length > 0
+    ? Prisma.sql`WHERE ${Prisma.join(conds, " AND ")}`
+    : Prisma.empty;
 
-  const errosMap = new Map(erroRows.map(e => [e.agenteId, e._count._all]));
+  const rows = await prisma.$queryRaw<QualidadeRow[]>`
+    SELECT
+      ae."agenteId",
+      COUNT(*)                                                         AS total_execucoes,
+      AVG(ae."duracao")                                                AS avg_duracao,
+      COUNT(CASE WHEN ae."erro" IS NOT NULL THEN 1 END)                AS total_erros,
+      COUNT(DISTINCT ae."contactId")                                   AS contatos_unicos,
+      ROUND(
+        COUNT(*)::numeric / NULLIF(COUNT(DISTINCT ae."contactId"), 0), 1
+      )                                                                AS media_interacoes
+    FROM "AgentExecution" ae
+    ${whereClause}
+    GROUP BY ae."agenteId"
+  `;
 
-  const contactMap = new Map<string | null, { contacts: number; totalExecs: number }>();
-  for (const cg of contactGroups) {
-    const acc = contactMap.get(cg.agenteId) ?? { contacts: 0, totalExecs: 0 };
-    acc.contacts++;
-    acc.totalExecs += cg._count._all;
-    contactMap.set(cg.agenteId, acc);
-  }
-
+  // Busca nomes dos agentes
   const ids = rows.map(r => r.agenteId).filter(Boolean) as string[];
   const agentes = await prisma.agente.findMany({
     where:  { id: { in: ids } },
@@ -212,14 +218,14 @@ export const usoQualidade = asyncHandler(async (req: Request, res: Response) => 
   const MAX_SLA_MS = 5000;
 
   return ok(res, rows.map(r => {
-    const total    = r._count._all;
-    const erros    = errosMap.get(r.agenteId) ?? 0;
-    const slaMs    = r._avg.duracao ?? 0;
-    const taxaErro = total > 0 ? erros / total : 0;
-    const slaScore = 1 - Math.min(slaMs / MAX_SLA_MS, 1);
-    const cs       = contactMap.get(r.agenteId);
-    const avgDepth = cs && cs.contacts > 0 ? cs.totalExecs / cs.contacts : 1;
-    const depthScore = Math.min(avgDepth / 5, 1);
+    const total      = Number(r.total_execucoes);
+    const erros      = Number(r.total_erros);
+    const slaMs      = Number(r.avg_duracao ?? 0);
+    const contatos   = Number(r.contatos_unicos);
+    const mediaInt   = Number(r.media_interacoes ?? 0);
+    const taxaErro   = total > 0 ? erros / total : 0;
+    const slaScore   = 1 - Math.min(slaMs / MAX_SLA_MS, 1);
+    const depthScore = Math.min((mediaInt || 1) / 5, 1);
     const qualidade  = Math.round((1 - taxaErro) * 50 + slaScore * 30 + depthScore * 20);
     const agente     = r.agenteId ? agenteMap.get(r.agenteId) : null;
 
@@ -232,10 +238,8 @@ export const usoQualidade = asyncHandler(async (req: Request, res: Response) => 
       execucoesErro:    erros,
       taxaErrosPct:     parseFloat((taxaErro * 100).toFixed(2)),
       slaMediaMs:       Math.round(slaMs),
-      contatosUnicos:   cs?.contacts ?? 0,
-      mediaInteracoesPorContato: cs && cs.contacts > 0
-        ? parseFloat((cs.totalExecs / cs.contacts).toFixed(1))
-        : 0,
+      contatosUnicos:   contatos,
+      mediaInteracoesPorContato: parseFloat(mediaInt.toFixed(1)),
       qualidade,
     };
   }).sort((a, b) => b.qualidade - a.qualidade));
