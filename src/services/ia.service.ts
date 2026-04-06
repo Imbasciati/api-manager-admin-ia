@@ -155,15 +155,18 @@ async function buildSystemPrompt(config: AgentConfig): Promise<string> {
 
 export type HistoricoMensagem = { role: "user" | "assistant"; content: string };
 
+export type ResultadoIA = { content: string; inputTokens: number; outputTokens: number };
+
 /**
  * Chat com histórico completo de conversa.
- * Usado pela integração Unnichat para manter contexto entre mensagens.
+ * Retorna conteúdo + tokens reais de entrada/saída para cálculo preciso de custo.
+ * Suporta OpenAI, Anthropic e Google Gemini.
  */
 export const chatWithAgentHistory = async (
   config: AgentConfig,
   historico: HistoricoMensagem[],
   mensagemAtual: string,
-): Promise<string> => {
+): Promise<ResultadoIA> => {
   const provider = detectarProvider(config.modelo);
   const apiKey = await getApiKey(provider);
   const systemPrompt = await buildSystemPrompt(config);
@@ -178,7 +181,12 @@ export const chatWithAgentHistory = async (
       { model: config.modelo, max_tokens: config.tokensMaximos, temperature: config.temperatura, system: systemPrompt, messages },
       { headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" } },
     );
-    return response.data?.content?.[0]?.text ?? "Sem resposta da IA.";
+    const usage = response.data?.usage;
+    return {
+      content: response.data?.content?.[0]?.text ?? "Sem resposta da IA.",
+      inputTokens: usage?.input_tokens ?? 0,
+      outputTokens: usage?.output_tokens ?? 0,
+    };
   }
 
   if (provider === "google") {
@@ -191,7 +199,12 @@ export const chatWithAgentHistory = async (
       { systemInstruction: { parts: [{ text: systemPrompt }] }, contents, generationConfig: { maxOutputTokens: config.tokensMaximos, temperature: config.temperatura } },
       { headers: { "Content-Type": "application/json" } },
     );
-    return response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "Sem resposta da IA.";
+    const meta = response.data?.usageMetadata;
+    return {
+      content: response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "Sem resposta da IA.",
+      inputTokens: meta?.promptTokenCount ?? 0,
+      outputTokens: meta?.candidatesTokenCount ?? 0,
+    };
   }
 
   // OpenAI (default)
@@ -205,7 +218,12 @@ export const chatWithAgentHistory = async (
     { model: config.modelo, temperature: config.temperatura, max_tokens: config.tokensMaximos, messages },
     { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } },
   );
-  return response.data?.choices?.[0]?.message?.content ?? "Sem resposta da IA.";
+  const usage = response.data?.usage;
+  return {
+    content: response.data?.choices?.[0]?.message?.content ?? "Sem resposta da IA.",
+    inputTokens: usage?.prompt_tokens ?? 0,
+    outputTokens: usage?.completion_tokens ?? 0,
+  };
 };
 
 /** Ponto de entrada principal — roteado por provedor. Suporta imagem (visão) para OpenAI. */

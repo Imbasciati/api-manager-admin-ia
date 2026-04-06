@@ -280,6 +280,9 @@ model ConversationMemory {
 model AgentExecution {
   id            String   @id @default(uuid())
   contactId     String
+  agenteId      String?  // agente configurado que gerou esta execução
+  modelo        String   @default("gpt-4.1-mini") // modelo de IA utilizado
+  canal         String   @default("manychat")      // unnichat | manychat | chat_teste
   inputMensagem String   @db.Text
   classificacao String
   resposta      String?  @db.Text
@@ -292,6 +295,9 @@ model AgentExecution {
 
   @@index([contactId])
   @@index([criadoEm])
+  @@index([agenteId])
+  @@index([modelo])
+  @@index([canal])
 }
 
 model ConfiguracaoAgente {

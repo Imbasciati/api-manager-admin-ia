@@ -59,7 +59,13 @@ export async function processContact(contactId: string): Promise<void> {
 
   if (classificacao !== "LEAD_REAL") {
     await bufferService.markProcessed(ids);
-    await executionLogger.log({ contactId, inputMensagem, classificacao });
+    await executionLogger.log({
+      contactId,
+      inputMensagem,
+      classificacao,
+      modelo: "gpt-4.1-mini",
+      canal:  "manychat",
+    });
     return;
   }
 
@@ -93,6 +99,8 @@ export async function processContact(contactId: string): Promise<void> {
     resposta,
     inputTokens,
     outputTokens,
+    modelo:  "gpt-4.1-mini",
+    canal:   "manychat",
     duracao: Date.now() - inicio,
     erro,
   });

@@ -42,6 +42,9 @@ import {
   custosLog,
   custosPorModelo,
   custosPorVendedor,
+  custosPorProvedor,
+  custosPorAgente,
+  custosPorCanal,
   custosResumo,
   custosTendencia,
 } from "../controllers/custos.controller";
@@ -140,11 +143,14 @@ router.get("/monitoramento/:usuarioId/stats", authMiddleware, statsVendedor);
 router.get("/uso", authMiddleware, usoResumo);
 router.get("/uso/por-hora", authMiddleware, usoPorHora);
 
-router.get("/custos/resumo", authMiddleware, custosResumo);
-router.get("/custos/por-modelo", authMiddleware, custosPorModelo);
+router.get("/custos/resumo",       authMiddleware, custosResumo);
+router.get("/custos/por-provedor", authMiddleware, custosPorProvedor);
+router.get("/custos/por-modelo",   authMiddleware, custosPorModelo);
+router.get("/custos/por-agente",   authMiddleware, custosPorAgente);
+router.get("/custos/por-canal",    authMiddleware, custosPorCanal);
 router.get("/custos/por-vendedor", authMiddleware, custosPorVendedor);
-router.get("/custos/tendencia", authMiddleware, custosTendencia);
-router.get("/custos/log", authMiddleware, custosLog);
+router.get("/custos/tendencia",    authMiddleware, custosTendencia);
+router.get("/custos/log",          authMiddleware, custosLog);
 
 router.get("/orientacoes", authMiddleware, getOrientacoes);
 router.put("/orientacoes", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), updateOrientacoes);

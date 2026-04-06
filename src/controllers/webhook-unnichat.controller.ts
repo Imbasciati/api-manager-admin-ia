@@ -6,6 +6,7 @@ import { broadcast } from "../services/sse.service";
 import { addMessage, getPendingMessages, markProcessed, scheduleProcessing, updateTranscricao } from "../services/message-buffer.service";
 import { splitMessageBlocks, calcMessageDelay, sleep } from "../utils/message-format";
 import { transcribeAudio, analyzeImage } from "../services/openai.service";
+import { log as logExecucao } from "../services/execution-logger.service";
 
 type MidiaTipo = "text" | "audio" | "image";
 
@@ -389,19 +390,55 @@ async function processarLoteMensagens(params: {
     : [];
 
   // 5. Chama a IA com o bloco combinado e resolvido
-  const respostaIA = await chatWithAgentHistory(
-    {
-      modelo: agente.modelo,
-      temperatura: agente.temperatura,
-      tokensMaximos: agente.tokensMaximos,
-      promptSistema: agente.promptSistema,
-      contextoProdutos: agente.contextoProdutos,
-    },
-    historico,
-    textosCombinados,
-  );
+  const inicio = Date.now();
+  let respostaIA = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let erroIA: string | undefined;
 
-  // 6. Salva resposta da IA e transmite via SSE
+  try {
+    const resultado = await chatWithAgentHistory(
+      {
+        modelo: agente.modelo,
+        temperatura: agente.temperatura,
+        tokensMaximos: agente.tokensMaximos,
+        promptSistema: agente.promptSistema,
+        contextoProdutos: agente.contextoProdutos,
+      },
+      historico,
+      textosCombinados,
+    );
+    respostaIA   = resultado.content;
+    inputTokens  = resultado.inputTokens;
+    outputTokens = resultado.outputTokens;
+  } catch (err) {
+    erroIA = err instanceof Error ? err.message : String(err);
+    console.error("[UNNICHAT] Erro na chamada à IA:", erroIA);
+  }
+
+  const duracao = Date.now() - inicio;
+
+  // 6. Registra execução com custo real (tokens captados de todos os provedores)
+  await logExecucao({
+    contactId,
+    agenteId: agente.id,
+    modelo:   agente.modelo,
+    canal:    "unnichat",
+    inputMensagem: textosCombinados,
+    classificacao: "LEAD_REAL",
+    resposta:  respostaIA || undefined,
+    inputTokens,
+    outputTokens,
+    duracao,
+    erro: erroIA,
+  });
+
+  if (!respostaIA) {
+    await markProcessed(mensagensBuffer.map((m) => m.id));
+    return;
+  }
+
+  // 7. Salva resposta da IA e transmite via SSE
   const msgIA = await prisma.mensagemAtendimento.create({
     data: {
       atendimentoId: atendimento.id,
@@ -415,7 +452,7 @@ async function processarLoteMensagens(params: {
   });
   broadcast("nova_mensagem", { atendimentoId: atendimento.id, mensagem: msgIA });
 
-  // 7. Atualiza memória contextual (mantém últimas 20 trocas = 40 mensagens)
+  // 8. Atualiza memória contextual (mantém últimas 20 trocas = 40 mensagens)
   const novoHistorico: HistoricoMensagem[] = [
     ...historico,
     { role: "user" as const, content: textosCombinados },
@@ -428,7 +465,7 @@ async function processarLoteMensagens(params: {
     update: { historico: novoHistorico },
   });
 
-  // 8. Envia resposta ao Unnichat em blocos separados com delay humanizado
+  // 9. Envia resposta ao Unnichat em blocos separados com delay humanizado
   const blocos = splitMessageBlocks(respostaIA);
   for (let i = 0; i < blocos.length; i++) {
     await enviarMensagem(agente.unnichatApiKey!, telefone, blocos[i]);
@@ -437,6 +474,6 @@ async function processarLoteMensagens(params: {
     }
   }
 
-  // 9. Marca todas as mensagens do buffer como processadas
+  // 10. Marca todas as mensagens do buffer como processadas
   await markProcessed(mensagensBuffer.map((m) => m.id));
 }
