@@ -37,7 +37,7 @@ import {
   agentesStatus,
   logsAgente,
 } from "../controllers/monitoramento.controller";
-import { usoPorHora, usoResumo } from "../controllers/uso.controller";
+import { usoPorHora, usoResumo, usoMetricas, usoPorDia, usoQualidade } from "../controllers/uso.controller";
 import {
   custosLog,
   custosPorModelo,
@@ -142,6 +142,9 @@ router.get("/monitoramento/:usuarioId/stats", authMiddleware, statsVendedor);
 
 router.get("/uso", authMiddleware, usoResumo);
 router.get("/uso/por-hora", authMiddleware, usoPorHora);
+router.get("/uso/metricas", authMiddleware, usoMetricas);
+router.get("/uso/por-dia",  authMiddleware, usoPorDia);
+router.get("/uso/qualidade", authMiddleware, usoQualidade);
 
 router.get("/custos/resumo",       authMiddleware, custosResumo);
 router.get("/custos/por-provedor", authMiddleware, custosPorProvedor);
