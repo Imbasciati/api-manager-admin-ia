@@ -5,6 +5,23 @@ import type { TipoMidia } from "../types/agent.types";
 // Timers de debounce por contactId — sem Redis, tudo em memória
 const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+// Cache do window de debounce — evita race condition ao definir timer sincronamente
+let cachedWindowMs = 4000;
+let windowCacheLoaded = false;
+
+async function loadWindowMs(): Promise<void> {
+  try {
+    const val = await getConfig("BUFFER_WINDOW_MS");
+    if (val) cachedWindowMs = Number(val);
+    windowCacheLoaded = true;
+  } catch {
+    // mantém valor padrão em caso de falha
+  }
+}
+
+// Pré-carrega na inicialização do módulo
+void loadWindowMs();
+
 export async function addMessage(
   contactId: string,
   tipo: TipoMidia,
