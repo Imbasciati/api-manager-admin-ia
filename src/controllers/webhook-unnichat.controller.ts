@@ -184,10 +184,124 @@ function placeholderMidia(tipo: MidiaTipo): string {
 }
 
 /**
+ * Detecta se o payload é uma notificação de template enviado pelo Unnichat ao lead.
+ * Quando `data.template` existe com conteúdo, o Unnichat está informando que
+ * disparou uma mensagem de template (ex: recuperação de carrinho) para o contato.
+ * Neste caso o sistema deve armazenar e contextualizar, mas NÃO acionar a IA.
+ */
+function detectarTemplate(body: Record<string, unknown>): string | null {
+  if (body.data && typeof body.data === "object") {
+    const d = body.data as Record<string, unknown>;
+    if (d.template && typeof d.template === "string" && d.template.trim()) {
+      return d.template.trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Processa uma mensagem de template enviada pelo Unnichat ao lead.
+ * Armazena no histórico do atendimento e na memória contextual (como mensagem
+ * do assistente), para que a IA tenha contexto quando o lead responder.
+ */
+async function processarTemplate(
+  res: Response,
+  agente: { id: string; nome: string },
+  rawBody: Record<string, unknown>,
+  templateTexto: string,
+) {
+  const d = (rawBody.data as Record<string, unknown>);
+  const phone = String(d.phoneNumber ?? d.phone ?? d.telefone ?? "");
+  const telefone = normalizePhone(phone);
+  const nome = d.name ? String(d.name) : null;
+  const contactIdBase = String(d.id ?? phone);
+  const contactId = `${agente.id}:${contactIdBase}`;
+
+  // Responde imediatamente ao Unnichat
+  res.status(200).json({ ok: true, tipo: "template", armazenado: true });
+
+  void (async () => {
+    try {
+      void logEvento({
+        agenteId: agente.id,
+        tipo: "TEMPLATE_ENVIADO",
+        canal: "unnichat",
+        contactId: contactIdBase,
+        payload: rawBody,
+      });
+
+      // Cria ou recupera atendimento
+      let atendimento = await prisma.atendimento.findFirst({
+        where: { telefone, canal: "unnichat", status: { not: "FINALIZADO" } },
+      });
+
+      if (!atendimento) {
+        atendimento = await prisma.atendimento.create({
+          data: {
+            telefone,
+            nome: nome ?? undefined,
+            canal: "unnichat",
+            status: "EM_ANDAMENTO",
+            agenteId: agente.id,
+            nomeAgente: agente.nome,
+          },
+        });
+        broadcast("novo_atendimento", atendimento);
+      } else if (nome && !atendimento.nome) {
+        atendimento = await prisma.atendimento.update({
+          where: { id: atendimento.id },
+          data: { nome },
+        });
+      }
+
+      // Salva o template como mensagem de saída do agente no histórico visual
+      const conteudoTemplate = `📨 [Mensagem enviada ao lead]\n${templateTexto}`;
+      const msgTemplate = await prisma.mensagemAtendimento.create({
+        data: {
+          atendimentoId: atendimento.id,
+          origem: "AGENTE_IA",
+          conteudo: conteudoTemplate,
+        },
+      });
+      await prisma.atendimento.update({
+        where: { id: atendimento.id },
+        data: { atualizadoEm: new Date() },
+      });
+      broadcast("nova_mensagem", { atendimentoId: atendimento.id, mensagem: msgTemplate });
+
+      // Persiste na memória contextual como mensagem do assistente
+      // para que a IA saiba o que foi enviado ao lead antes de ele responder
+      const memoria = await prisma.conversationMemory.findUnique({ where: { contactId } });
+      const historicoAtual: HistoricoMensagem[] = Array.isArray(memoria?.historico)
+        ? (memoria!.historico as HistoricoMensagem[])
+        : [];
+
+      const novoHistorico: HistoricoMensagem[] = [
+        ...historicoAtual,
+        { role: "assistant" as const, content: `[Mensagem enviada ao lead]\n${templateTexto}` },
+      ].slice(-40);
+
+      await prisma.conversationMemory.upsert({
+        where: { contactId },
+        create: { contactId, historico: novoHistorico },
+        update: { historico: novoHistorico },
+      });
+
+      console.log(`[UNNICHAT] Template armazenado para ${telefone} (agente ${agente.id})`);
+    } catch (err) {
+      console.error("[UNNICHAT] Erro ao processar template:", err instanceof Error ? err.message : err);
+    }
+  })();
+}
+
+/**
  * POST /api/webhook/unnichat/:agenteId
  *
  * Recebe mensagem do Unnichat → enfileira no buffer → aguarda debounce →
  * combina sequência de mensagens (transcrevendo áudio/imagens) → responde via IA.
+ *
+ * Caso especial: payload com `data.template` = notificação de template enviado
+ * pelo Unnichat ao lead → armazena contexto, NÃO aciona a IA.
  */
 export async function receberMensagemUnnichat(req: Request, res: Response) {
   const agenteId = String(req.params.agenteId);
@@ -211,12 +325,19 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
     return res.status(500).json({ error: "Nenhuma conexão Unnichat configurada para este agente. Vincule uma conexão em Configurações → Unnichat." });
   }
 
-  // 2. Extrai dados do payload (texto OU mídia)
   const rawBody = req.body as Record<string, unknown>;
+
+  // 2. Verifica se é um evento de template (mensagem enviada pelo Unnichat ao lead)
+  //    Neste caso: armazena como contexto e retorna — sem acionar a IA.
+  const templateTexto = detectarTemplate(rawBody);
+  if (templateTexto !== null) {
+    return processarTemplate(res, agente, rawBody, templateTexto);
+  }
+
+  // 3. Extrai dados do payload (texto OU mídia enviado pelo lead)
   const payload = extrairPayload(rawBody);
 
   if (!payload) {
-    // Loga evento ignorado para auditoria
     void logEvento({
       agenteId,
       tipo: "MENSAGEM_RECEBIDA",
@@ -420,9 +541,31 @@ async function processarLoteMensagens(params: {
 
   // 4. Carrega histórico contextual da conversa
   const memoria = await prisma.conversationMemory.findUnique({ where: { contactId } });
-  const historico: HistoricoMensagem[] = Array.isArray(memoria?.historico)
+  let historico: HistoricoMensagem[] = Array.isArray(memoria?.historico)
     ? (memoria!.historico as HistoricoMensagem[])
     : [];
+
+  // Fallback: se a memória está vazia (primeiro contato, restart ou contactId novo),
+  // reconstrói o histórico a partir das últimas 30 mensagens do atendimento no banco.
+  // Isso garante que a IA sempre tem contexto mesmo sem ConversationMemory.
+  if (historico.length === 0) {
+    const msgsBanco = await prisma.mensagemAtendimento.findMany({
+      where: { atendimentoId: atendimento.id },
+      orderBy: { criadoEm: "desc" },
+      take: 30,
+      select: { origem: true, conteudo: true },
+    });
+
+    if (msgsBanco.length > 0) {
+      historico = msgsBanco
+        .reverse() // volta à ordem cronológica
+        .map((m) => ({
+          role: m.origem === "CLIENTE" ? ("user" as const) : ("assistant" as const),
+          content: m.conteudo,
+        }));
+      console.log(`[UNNICHAT] Histórico reconstruído do banco: ${historico.length} msgs para ${contactId}`);
+    }
+  }
 
   // 5. Chama a IA com o bloco combinado e resolvido
   const inicio = Date.now();

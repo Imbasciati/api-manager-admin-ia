@@ -13,23 +13,31 @@ export async function verificarAgente(agenteId: string): Promise<{
 }> {
   const agente = await prisma.agente.findUnique({
     where: { id: agenteId },
-    select: { id: true, unnichatAtivo: true, unnichatApiKey: true },
+    select: {
+      id: true,
+      unnichatAtivo: true,
+      unnichatApiKey: true,
+      conexaoUnnichat: { select: { apiKey: true, ativo: true } },
+    },
   });
 
   if (!agente) {
     return { status: "ERRO", detalhe: "Agente não encontrado" };
   }
 
-  if (!agente.unnichatAtivo || !agente.unnichatApiKey) {
+  // Resolve a API Key: prefere a conexão nomeada, fallback para o campo legado
+  const apiKey = agente.conexaoUnnichat?.apiKey ?? agente.unnichatApiKey;
+
+  if (!agente.unnichatAtivo || !apiKey) {
     const detalhe = !agente.unnichatAtivo
       ? "Integração Unnichat inativa"
-      : "API Key não configurada";
+      : "Nenhuma conexão Unnichat vinculada ao agente";
 
     await upsertStatus(agenteId, "OFFLINE", detalhe);
     return { status: "OFFLINE", detalhe };
   }
 
-  const resultado = await testarConexao(agente.unnichatApiKey);
+  const resultado = await testarConexao(apiKey);
   const status: StatusConexao = resultado.ok ? "ONLINE" : "ERRO";
 
   await upsertStatus(agenteId, status, resultado.mensagem);
@@ -39,7 +47,13 @@ export async function verificarAgente(agenteId: string): Promise<{
 /** Roda verificação em paralelo para todos os agentes com Unnichat ativo. */
 export async function verificarTodos(): Promise<void> {
   const agentes = await prisma.agente.findMany({
-    where: { unnichatAtivo: true, ativo: true },
+    where: {
+      ativo: true,
+      OR: [
+        { unnichatAtivo: true },
+        { canalIntegracao: { in: ["UNNICHAT", "AMBOS"] } },
+      ],
+    },
     select: { id: true },
   });
 

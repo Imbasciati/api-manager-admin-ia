@@ -11,17 +11,30 @@ import { ok } from "../utils/response";
 export const listAtendimentos = asyncHandler(async (req: Request, res: Response) => {
   const { page, limit, skip } = parsePagination(req);
 
-  const status = req.query.status as string | undefined;
-  const campanha = req.query.campanha as string | undefined;
-  const search = String(req.query.search ?? "").trim();
+  const status     = req.query.status     as string | undefined;
+  const campanha   = req.query.campanha   as string | undefined;
+  const agenteId   = req.query.agenteId   as string | undefined;
+  const dataInicio = req.query.dataInicio as string | undefined;
+  const dataFim    = req.query.dataFim    as string | undefined;
+  const search     = String(req.query.search ?? "").trim();
 
   const where: Record<string, unknown> = {};
-  if (status) where.status = status;
+  if (status)   where.status   = status;
   if (campanha) where.campanha = { contains: campanha, mode: "insensitive" };
+  if (agenteId) where.agenteId = agenteId;
+
+  if (dataInicio || dataFim) {
+    where.criadoEm = {
+      ...(dataInicio ? { gte: new Date(`${dataInicio}T00:00:00`) } : {}),
+      ...(dataFim    ? { lte: new Date(`${dataFim}T23:59:59`)    } : {}),
+    };
+  }
+
   if (search) {
     where.OR = [
-      { telefone: { contains: search, mode: "insensitive" } },
-      { nome: { contains: search, mode: "insensitive" } },
+      { telefone:  { contains: search, mode: "insensitive" } },
+      { nome:      { contains: search, mode: "insensitive" } },
+      { nomeAgente:{ contains: search, mode: "insensitive" } },
     ];
   }
 
@@ -32,11 +45,22 @@ export const listAtendimentos = asyncHandler(async (req: Request, res: Response)
       skip,
       take: limit,
       orderBy: { atualizadoEm: "desc" },
-      include: {
+      select: {
+        id:          true,
+        telefone:    true,
+        nome:        true,
+        campanha:    true,
+        canal:       true,
+        status:      true,
+        agenteId:    true,
+        nomeAgente:  true,
+        criadoEm:    true,
+        atualizadoEm:true,
         _count: { select: { mensagens: true } },
         mensagens: {
           orderBy: { criadoEm: "desc" },
           take: 1,
+          select: { conteudo: true, criadoEm: true, origem: true },
         },
       },
     }),

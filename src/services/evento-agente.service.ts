@@ -4,7 +4,8 @@ import { prisma } from "../prisma/client";
 export type TipoEvento =
   | "MENSAGEM_RECEBIDA"
   | "LOTE_PROCESSADO"
-  | "ERRO_WEBHOOK";
+  | "ERRO_WEBHOOK"
+  | "TEMPLATE_ENVIADO";
 
 export interface LogEventoParams {
   agenteId: string;
