@@ -11,6 +11,7 @@ import { authMiddleware } from "./middlewares/auth.middleware";
 import { errorHandlerMiddleware } from "./middlewares/errorHandler.middleware";
 import { fail } from "./utils/response";
 import { prisma } from "./prisma/client";
+import { iniciarMonitoramentoConexoes, pararMonitoramentoConexoes } from "./services/conexao-health.service";
 
 // ── Validação de variáveis de ambiente obrigatórias ───────────────────────────
 const REQUIRED_ENV = ["DATABASE_URL", "JWT_SECRET"] as const;
@@ -71,12 +72,14 @@ const port = Number(process.env.PORT ?? 3001);
 const server = app.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`Beta Admin IA API executando na porta ${port}`);
+  iniciarMonitoramentoConexoes();
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 async function shutdown(signal: string) {
   // eslint-disable-next-line no-console
   console.log(`[shutdown] Sinal ${signal} recebido. Encerrando servidor...`);
+  pararMonitoramentoConexoes();
   server.close(async () => {
     await prisma.$disconnect();
     // eslint-disable-next-line no-console

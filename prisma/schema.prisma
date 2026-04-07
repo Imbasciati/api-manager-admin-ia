@@ -309,3 +309,33 @@ model ConfiguracaoAgente {
   criadoEm     DateTime @default(now())
   atualizadoEm DateTime @updatedAt
 }
+
+// ── Monitoramento de Eventos e Conexões ───────────────────────────────────────
+
+/// Registra cada evento recebido pelos webhooks dos agentes (Unnichat, n8n, etc.)
+model EventoAgente {
+  id        String   @id @default(uuid())
+  agenteId  String
+  tipo      String   // MENSAGEM_RECEBIDA | LOTE_PROCESSADO | ERRO_WEBHOOK
+  canal     String   @default("unnichat") // unnichat | manychat | n8n
+  contactId String?
+  payload   Json     // payload bruto do evento
+  erro      String?  @db.Text
+  criadoEm  DateTime @default(now())
+
+  @@index([agenteId, criadoEm])
+  @@index([agenteId, erro])
+  @@index([criadoEm])
+}
+
+/// Armazena o resultado da última verificação de conectividade de cada agente
+model ConexaoStatus {
+  id           String   @id @default(uuid())
+  agenteId     String   @unique
+  status       String   @default("DESCONHECIDO") // ONLINE | OFFLINE | ERRO | DESCONHECIDO
+  detalhe      String?  @db.Text
+  verificadoEm DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  @@index([agenteId])
+}

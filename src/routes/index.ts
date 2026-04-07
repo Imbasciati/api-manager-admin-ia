@@ -36,6 +36,10 @@ import {
   vendedoresOnline,
   agentesStatus,
   logsAgente,
+  eventosAgente,
+  errosAgente,
+  conexoesStatus,
+  verificarConexaoAgente,
 } from "../controllers/monitoramento.controller";
 import { usoPorHora, usoResumo, usoMetricas, usoPorDia, usoQualidade } from "../controllers/uso.controller";
 import {
@@ -137,6 +141,10 @@ router.post("/webhook/unnichat/:agenteId", receberMensagemUnnichat);
 router.get("/monitoramento/vendedores", authMiddleware, vendedoresOnline);
 router.get("/monitoramento/agentes", authMiddleware, agentesStatus);
 router.get("/monitoramento/agentes/:agenteId/logs", authMiddleware, logsAgente);
+router.get("/monitoramento/agentes/:agenteId/eventos", authMiddleware, eventosAgente);
+router.get("/monitoramento/agentes/:agenteId/erros", authMiddleware, errosAgente);
+router.post("/monitoramento/agentes/:agenteId/verificar", authMiddleware, verificarConexaoAgente);
+router.get("/monitoramento/conexoes", authMiddleware, conexoesStatus);
 router.get("/monitoramento/:usuarioId", authMiddleware, historicoVendedor);
 router.get("/monitoramento/:usuarioId/stats", authMiddleware, statsVendedor);
 

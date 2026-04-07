@@ -4,6 +4,8 @@ import { StatusResposta } from "@prisma/client";
 import { prisma } from "../prisma/client";
 import { asyncHandler } from "../utils/asyncHandler";
 import { ok } from "../utils/response";
+import { listarEventos, resumoEventos } from "../services/evento-agente.service";
+import { listarStatusConexoes, verificarAgente } from "../services/conexao-health.service";
 
 // ── Agentes: status e logs técnicos ──────────────────────────────────────────
 
@@ -109,4 +111,60 @@ export const statsVendedor = asyncHandler(async (req: Request, res: Response) =>
   });
 
   return ok(res, stats);
+});
+
+// ── Eventos por agente ────────────────────────────────────────────────────────
+
+/** Lista os eventos recebidos por um agente, com suporte a paginação e filtro de erros. */
+export const eventosAgente = asyncHandler(async (req: Request, res: Response) => {
+  const agenteId   = String(req.params.agenteId);
+  const limit      = Math.min(Number(req.query.limit ?? 50), 200);
+  const offset     = Number(req.query.offset ?? 0);
+  const apenasErros = req.query.erros === "true";
+
+  const [eventos, resumo] = await Promise.all([
+    listarEventos(agenteId, { limit, offset, apenasErros }),
+    resumoEventos(agenteId),
+  ]);
+
+  return ok(res, { eventos, resumo });
+});
+
+/** Lista erros de execução da IA (AgentExecution.erro) para um agente. */
+export const errosAgente = asyncHandler(async (req: Request, res: Response) => {
+  const agenteId = String(req.params.agenteId);
+  const limit    = Math.min(Number(req.query.limit ?? 50), 200);
+
+  const erros = await prisma.agentExecution.findMany({
+    where: { agenteId, erro: { not: null } },
+    select: {
+      id: true,
+      contactId: true,
+      modelo: true,
+      canal: true,
+      inputMensagem: true,
+      erro: true,
+      duracao: true,
+      criadoEm: true,
+    },
+    orderBy: { criadoEm: "desc" },
+    take: limit,
+  });
+
+  return ok(res, erros);
+});
+
+// ── Conexões ──────────────────────────────────────────────────────────────────
+
+/** Retorna o status de conectividade de todos os agentes ativos. */
+export const conexoesStatus = asyncHandler(async (_req: Request, res: Response) => {
+  const data = await listarStatusConexoes();
+  return ok(res, data);
+});
+
+/** Força verificação imediata de um agente específico e retorna o resultado. */
+export const verificarConexaoAgente = asyncHandler(async (req: Request, res: Response) => {
+  const agenteId = String(req.params.agenteId);
+  const resultado = await verificarAgente(agenteId);
+  return ok(res, resultado);
 });

@@ -7,6 +7,7 @@ import { addMessage, getPendingMessages, markProcessed, scheduleProcessing, upda
 import { splitMessageBlocks, calcMessageDelay, sleep } from "../utils/message-format";
 import { transcribeAudio, analyzeImage } from "../services/openai.service";
 import { log as logExecucao } from "../services/execution-logger.service";
+import { logEvento } from "../services/evento-agente.service";
 
 type MidiaTipo = "text" | "audio" | "image";
 
@@ -205,8 +206,18 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
   }
 
   // 2. Extrai dados do payload (texto OU mídia)
-  const payload = extrairPayload(req.body as Record<string, unknown>);
+  const rawBody = req.body as Record<string, unknown>;
+  const payload = extrairPayload(rawBody);
+
   if (!payload) {
+    // Loga evento ignorado para auditoria
+    void logEvento({
+      agenteId,
+      tipo: "MENSAGEM_RECEBIDA",
+      canal: "unnichat",
+      payload: rawBody,
+      erro: "Payload sem conteúdo reconhecível",
+    });
     return res.status(200).json({ ok: true, ignorado: true, motivo: "Payload sem conteúdo" });
   }
 
@@ -222,6 +233,22 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
   // 4. Enfileira e agenda processamento
   void (async () => {
     try {
+      // Loga evento de recebimento com payload completo para auditoria
+      void logEvento({
+        agenteId,
+        tipo: "MENSAGEM_RECEBIDA",
+        canal: "unnichat",
+        contactId: payload.contactId,
+        payload: {
+          telefone: payload.telefone,
+          nome: payload.nome,
+          tipo: payload.tipo,
+          texto: payload.texto,
+          mediaUrl: payload.mediaUrl,
+          raw: rawBody,
+        },
+      });
+
       // Conteúdo salvo no buffer: texto puro ou a URL da mídia (será transcrita depois)
       const conteudoBuffer = tipo === "text" ? texto : (mediaUrl ?? texto);
       await addMessage(contactId, tipo, conteudoBuffer, mediaUrl);
@@ -476,4 +503,19 @@ async function processarLoteMensagens(params: {
 
   // 10. Marca todas as mensagens do buffer como processadas
   await markProcessed(mensagensBuffer.map((m) => m.id));
+
+  // 11. Loga resultado do processamento para monitoramento
+  void logEvento({
+    agenteId: agente.id,
+    tipo: "LOTE_PROCESSADO",
+    canal: "unnichat",
+    contactId,
+    payload: {
+      mensagens: mensagensBuffer.length,
+      tokens: { input: inputTokens, output: outputTokens },
+      duracao,
+      erro: erroIA ?? null,
+    },
+    erro: erroIA,
+  });
 }
