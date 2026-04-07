@@ -224,12 +224,12 @@ router.get("/configuracoes/agente", authMiddleware, roleMiddleware(Perfil.ADMIN)
 router.put("/configuracoes/agente/:chave", authMiddleware, roleMiddleware(Perfil.ADMIN), updateAgenteConfig);
 router.delete("/configuracoes/agente/:chave", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteAgenteConfig);
 
-// Configurações — Conexões Unnichat (somente ADMIN)
-router.get("/configuracoes/unnichat/conexoes", authMiddleware, roleMiddleware(Perfil.ADMIN), listConexoes);
-router.post("/configuracoes/unnichat/conexoes", authMiddleware, roleMiddleware(Perfil.ADMIN), createConexao);
-router.put("/configuracoes/unnichat/conexoes/:id", authMiddleware, roleMiddleware(Perfil.ADMIN), updateConexao);
-router.delete("/configuracoes/unnichat/conexoes/:id", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteConexao);
-router.post("/configuracoes/unnichat/conexoes/:id/testar", authMiddleware, roleMiddleware(Perfil.ADMIN), testarConexaoUnnichatConfig);
+// Configurações — Conexões Unnichat (ADMIN e SUPERVISOR)
+router.get("/configuracoes/unnichat/conexoes", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), listConexoes);
+router.post("/configuracoes/unnichat/conexoes", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), createConexao);
+router.put("/configuracoes/unnichat/conexoes/:id", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), updateConexao);
+router.delete("/configuracoes/unnichat/conexoes/:id", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), deleteConexao);
+router.post("/configuracoes/unnichat/conexoes/:id/testar", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), testarConexaoUnnichatConfig);
 
 // Conversas Supabase — profissões / sessões / mensagens / stats / custos
 router.get("/conversas/stats", authMiddleware, getStatsDashboard);
