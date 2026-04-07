@@ -5,6 +5,10 @@ import * as configService from "../services/agente-config.service";
 
 // Metadados dos campos configuráveis do agente de vendas
 const CAMPOS: Record<string, { descricao: string; sensivel: boolean; padrao?: string }> = {
+  UNNICHAT_API_KEY: {
+    descricao: "API Key global (Bearer token) do Unnichat para envio de mensagens WhatsApp",
+    sensivel: true,
+  },
   MANYCHAT_TOKEN: {
     descricao: "Token de autenticação da API do ManyChat",
     sensivel: true,

@@ -8,6 +8,7 @@ import { splitMessageBlocks, calcMessageDelay, sleep } from "../utils/message-fo
 import { transcribeAudio, analyzeImage } from "../services/openai.service";
 import { log as logExecucao } from "../services/execution-logger.service";
 import { logEvento } from "../services/evento-agente.service";
+import { getConfig } from "../services/agente-config.service";
 
 type MidiaTipo = "text" | "audio" | "image";
 
@@ -201,8 +202,11 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
   if (!agente.unnichatAtivo) {
     return res.status(403).json({ error: "Integração Unnichat inativa para este agente" });
   }
-  if (!agente.unnichatApiKey) {
-    return res.status(500).json({ error: "API Key Unnichat não configurada" });
+
+  // Resolve API key: per-agent key takes priority, falls back to global config
+  const unnichatApiKey = agente.unnichatApiKey || await getConfig("UNNICHAT_API_KEY");
+  if (!unnichatApiKey) {
+    return res.status(500).json({ error: "API Key Unnichat não configurada. Configure em Configurações → Unnichat." });
   }
 
   // 2. Extrai dados do payload (texto OU mídia)
@@ -309,6 +313,7 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
 
         await processarLoteMensagens({
           agente,
+          unnichatApiKey,
           contactId: cId,
           telefone: ctx.telefone,
           nome: ctx.nome,
@@ -337,11 +342,12 @@ async function processarLoteMensagens(params: {
     contextoProdutos: string | null;
     unnichatApiKey: string | null;
   };
+  unnichatApiKey: string;
   contactId: string;
   telefone: string;
   nome: string | null;
 }) {
-  const { agente, contactId, telefone } = params;
+  const { agente, unnichatApiKey, contactId, telefone } = params;
 
   // 1. Busca todas as mensagens pendentes no buffer (em ordem de chegada)
   const mensagensBuffer = await getPendingMessages(contactId);
@@ -495,7 +501,7 @@ async function processarLoteMensagens(params: {
   // 9. Envia resposta ao Unnichat em blocos separados com delay humanizado
   const blocos = splitMessageBlocks(respostaIA);
   for (let i = 0; i < blocos.length; i++) {
-    await enviarMensagem(agente.unnichatApiKey!, telefone, blocos[i]);
+    await enviarMensagem(unnichatApiKey, telefone, blocos[i]);
     if (i < blocos.length - 1) {
       await sleep(calcMessageDelay(blocos[i]));
     }
