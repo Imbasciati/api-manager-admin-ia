@@ -582,6 +582,7 @@ async function processarLoteMensagens(params: {
         tokensMaximos: agente.tokensMaximos,
         promptSistema: agente.promptSistema,
         contextoProdutos: agente.contextoProdutos,
+        agenteId: agente.id,
       },
       historico,
       textosCombinados,

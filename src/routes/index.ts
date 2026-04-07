@@ -74,6 +74,7 @@ import {
   toggleProvedor,
 } from "../controllers/provedores.controller";
 import {
+  avaliarMensagem,
   deleteAtendimento,
   getAtendimento,
   getMensagensAtendimento,
@@ -211,6 +212,7 @@ router.get("/atendimentos/:id", authMiddleware, getAtendimento);
 router.get("/atendimentos/:id/mensagens", authMiddleware, getMensagensAtendimento);
 router.patch("/atendimentos/:id/status", authMiddleware, updateStatus);
 router.delete("/atendimentos/:id", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), deleteAtendimento);
+router.post("/atendimentos/mensagens/:id/avaliar", authMiddleware, avaliarMensagem);
 
 // Configurações — Webhooks (somente ADMIN)
 router.get("/configuracoes/webhooks", authMiddleware, roleMiddleware(Perfil.ADMIN), listWebhooks);

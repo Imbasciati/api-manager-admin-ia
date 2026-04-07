@@ -53,6 +53,7 @@ model Agente {
   criadoEm            DateTime         @default(now())
   custos              CustoIA[]
   monitoramento       Monitoramento[]
+  avaliacoes          AvaliacaoMensagem[]
   atendimentos        Atendimento[]
 }
 
@@ -254,6 +255,7 @@ model MensagemAtendimento {
   origem         OrigemMensagem @default(CLIENTE)
   conteudo       String         @db.Text
   criadoEm       DateTime       @default(now())
+  avaliacao      AvaliacaoMensagem?
 }
 
 model ConfiguracaoWebhook {
@@ -352,4 +354,19 @@ model ConexaoStatus {
   atualizadoEm DateTime @updatedAt
 
   @@index([agenteId])
+}
+
+/// Avaliação de mensagens da IA — feedback manual para fine-tuning contextual
+model AvaliacaoMensagem {
+  id            String   @id @default(uuid())
+  mensagemId    String   @unique
+  mensagem      MensagemAtendimento @relation(fields: [mensagemId], references: [id], onDelete: Cascade)
+  agenteId      String
+  agente        Agente   @relation(fields: [agenteId], references: [id], onDelete: Cascade)
+  tipo          String   // "POSITIVO" | "NEGATIVO"
+  justificativa String?  @db.Text
+  criadoEm      DateTime @default(now())
+
+  @@index([agenteId])
+  @@index([agenteId, tipo])
 }

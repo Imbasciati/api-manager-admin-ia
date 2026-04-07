@@ -8,6 +8,7 @@ type AgentConfig = {
   tokensMaximos: number;
   promptSistema: string;
   contextoProdutos?: string | null;
+  agenteId?: string;
 };
 
 /** Detecta o provedor a partir do ID do modelo. */
@@ -140,7 +141,18 @@ async function chatGemini(config: AgentConfig, mensagem: string, apiKey: string)
 }
 
 async function buildSystemPrompt(config: AgentConfig): Promise<string> {
-  const orientacao = await prisma.orientacaoGlobal.findFirst();
+  const [orientacao, avaliacoes] = await Promise.all([
+    prisma.orientacaoGlobal.findFirst(),
+    config.agenteId
+      ? prisma.avaliacaoMensagem.findMany({
+          where: { agenteId: config.agenteId },
+          include: { mensagem: { select: { conteudo: true } } },
+          orderBy: { criadoEm: "desc" },
+          take: 30,
+        })
+      : Promise.resolve([] as Awaited<ReturnType<typeof prisma.avaliacaoMensagem.findMany<{ include: { mensagem: { select: { conteudo: true } } } }>>>),
+  ]);
+
   const partes: string[] = [];
 
   if (orientacao?.conteudo?.trim()) {
@@ -149,6 +161,29 @@ async function buildSystemPrompt(config: AgentConfig): Promise<string> {
 
   partes.push(config.promptSistema);
   partes.push(`Contexto de produtos:\n${config.contextoProdutos ?? "Sem contexto adicional."}`);
+
+  if (avaliacoes.length > 0) {
+    const positivos = avaliacoes.filter((a) => a.tipo === "POSITIVO");
+    const negativos = avaliacoes.filter((a) => a.tipo === "NEGATIVO");
+
+    if (positivos.length > 0) {
+      const exemplos = positivos
+        .map((a, i) => `${i + 1}. "${a.mensagem.conteudo}"`)
+        .join("\n\n");
+      partes.push(
+        `## Exemplos de respostas APROVADAS pelo supervisor — replique este tom e estilo:\n${exemplos}`,
+      );
+    }
+
+    if (negativos.length > 0) {
+      const exemplos = negativos
+        .map((a, i) => `${i + 1}. Resposta inadequada: "${a.mensagem.conteudo}"\n   Motivo: ${a.justificativa ?? "Sem justificativa"}`)
+        .join("\n\n");
+      partes.push(
+        `## Padrões de resposta a EVITAR — feedback dos supervisores:\n${exemplos}`,
+      );
+    }
+  }
 
   return partes.join("\n\n");
 }

@@ -116,6 +116,50 @@ export const getMensagensAtendimento = asyncHandler(async (req: Request, res: Re
   return ok(res, mensagens);
 });
 
+/** Avalia uma mensagem da IA (like/dislike) para fine-tuning contextual do agente. */
+export const avaliarMensagem = asyncHandler(async (req: Request, res: Response) => {
+  const mensagemId = String(req.params.id);
+
+  const body = z
+    .object({
+      tipo: z.enum(["POSITIVO", "NEGATIVO"]),
+      justificativa: z.string().trim().optional(),
+    })
+    .safeParse(req.body);
+
+  if (!body.success) throw new AppError(body.error.issues[0].message, 400, "VALIDATION_ERROR");
+  const { tipo, justificativa } = body.data;
+
+  if (tipo === "NEGATIVO" && !justificativa) {
+    throw new AppError("Justificativa obrigatória para avaliação negativa", 400, "VALIDATION_ERROR");
+  }
+
+  const mensagem = await prisma.mensagemAtendimento.findUnique({
+    where: { id: mensagemId },
+    include: { atendimento: { select: { agenteId: true } } },
+  });
+
+  if (!mensagem) throw new AppError("Mensagem não encontrada", 404);
+  if (mensagem.origem !== "AGENTE_IA") throw new AppError("Só é possível avaliar mensagens da IA", 400);
+  if (!mensagem.atendimento.agenteId) throw new AppError("Atendimento sem agente vinculado", 400);
+
+  const avaliacao = await prisma.avaliacaoMensagem.upsert({
+    where: { mensagemId },
+    create: {
+      mensagemId,
+      agenteId: mensagem.atendimento.agenteId,
+      tipo,
+      justificativa: justificativa ?? null,
+    },
+    update: {
+      tipo,
+      justificativa: justificativa ?? null,
+    },
+  });
+
+  return ok(res, avaliacao);
+});
+
 /** SSE — stream de eventos em tempo real. */
 export function sseAtendimentos(req: Request, res: Response) {
   res.setHeader("Content-Type", "text/event-stream");
