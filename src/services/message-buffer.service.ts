@@ -57,9 +57,12 @@ export async function updateTranscricao(id: string, transcricao: string): Promis
 
 /**
  * Agenda o processamento de um contactId com debounce.
- * Cada nova mensagem reinicia o timer; só processa depois de BUFFER_WINDOW_MS
+ * Cada nova mensagem reinicia o timer; só processa depois de cachedWindowMs
  * sem novas mensagens do mesmo contato.
- * Lê BUFFER_WINDOW_MS do banco (configurável via UI), fallback para .env/padrão.
+ *
+ * O timer é definido SINCRONAMENTE usando cachedWindowMs para que o
+ * clearTimeout funcione corretamente mesmo com mensagens em rápida sucessão.
+ * O cache é atualizado de forma assíncrona após cada disparo.
  */
 export function scheduleProcessing(
   contactId: string,
@@ -68,19 +71,17 @@ export function scheduleProcessing(
   const existing = pendingTimers.get(contactId);
   if (existing) clearTimeout(existing);
 
-  // Lê o window assincronamente, depois agenda o timer
-  void getConfig("BUFFER_WINDOW_MS").then((windowMsStr) => {
-    const windowMs = Number(windowMsStr ?? 2000);
+  // Timer definido sincronamente — sem race condition
+  const timer = setTimeout(async () => {
+    pendingTimers.delete(contactId);
+    // Atualiza cache para o próximo ciclo
+    void loadWindowMs();
+    try {
+      await processor(contactId);
+    } catch (err) {
+      console.error(`[buffer] Erro ao processar contactId=${contactId}:`, err);
+    }
+  }, cachedWindowMs);
 
-    const timer = setTimeout(async () => {
-      pendingTimers.delete(contactId);
-      try {
-        await processor(contactId);
-      } catch (err) {
-        console.error(`[buffer] Erro ao processar contactId=${contactId}:`, err);
-      }
-    }, windowMs);
-
-    pendingTimers.set(contactId, timer);
-  });
+  pendingTimers.set(contactId, timer);
 }
