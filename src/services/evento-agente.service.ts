@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma/client";
 
 export type TipoEvento =
@@ -10,7 +11,7 @@ export interface LogEventoParams {
   tipo: TipoEvento;
   canal?: string;
   contactId?: string;
-  payload: Record<string, unknown>;
+  payload: object;
   erro?: string;
 }
 
@@ -26,7 +27,7 @@ export async function logEvento(params: LogEventoParams): Promise<void> {
         tipo:      params.tipo,
         canal:     params.canal ?? "unnichat",
         contactId: params.contactId ?? null,
-        payload:   params.payload,
+        payload:   params.payload as Prisma.InputJsonValue,
         erro:      params.erro ?? null,
       },
     });
