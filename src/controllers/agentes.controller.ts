@@ -24,6 +24,7 @@ const agenteSchema = z.object({
   unnichatAtivo: z.coerce.boolean().optional(),
   unnichatApiKey: z.string().optional().nullable(),
   unnichatConexaoNome: z.string().optional().nullable(),
+  conexaoUnnichatId: z.string().optional().nullable(),
   produto: z.string().optional().nullable(),
   atuacao: z.string().optional().nullable(),
 });
@@ -245,12 +246,17 @@ export const removeDocumento = asyncHandler(async (req: Request, res: Response) 
 
 export const testarConexaoUnnichat = asyncHandler(async (req: Request, res: Response) => {
   const id = String(req.params.id);
-  const agente = await prisma.agente.findUnique({ where: { id }, select: { unnichatApiKey: true } });
+  const agente = await prisma.agente.findUnique({
+    where: { id },
+    select: { conexaoUnnichatId: true, conexaoUnnichat: { select: { apiKey: true } } },
+  });
 
   if (!agente) throw new AppError("Agente não encontrado", 404, "NOT_FOUND");
-  if (!agente.unnichatApiKey) throw new AppError("API Key Unnichat não configurada", 400);
 
-  const resultado = await testarConexao(agente.unnichatApiKey);
+  const apiKey = agente.conexaoUnnichat?.apiKey;
+  if (!apiKey) throw new AppError("Nenhuma conexão Unnichat vinculada a este agente. Configure em Configurações → Unnichat.", 400);
+
+  const resultado = await testarConexao(apiKey);
   return ok(res, resultado);
 });
 

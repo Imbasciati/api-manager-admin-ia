@@ -8,7 +8,6 @@ import { splitMessageBlocks, calcMessageDelay, sleep } from "../utils/message-fo
 import { transcribeAudio, analyzeImage } from "../services/openai.service";
 import { log as logExecucao } from "../services/execution-logger.service";
 import { logEvento } from "../services/evento-agente.service";
-import { getConfig } from "../services/agente-config.service";
 
 type MidiaTipo = "text" | "audio" | "image";
 
@@ -194,7 +193,10 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
   const agenteId = String(req.params.agenteId);
 
   // 1. Busca o agente e valida integração
-  const agente = await prisma.agente.findUnique({ where: { id: agenteId } });
+  const agente = await prisma.agente.findUnique({
+    where: { id: agenteId },
+    include: { conexaoUnnichat: true },
+  });
 
   if (!agente) {
     return res.status(404).json({ error: "Agente não encontrado" });
@@ -203,10 +205,10 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
     return res.status(403).json({ error: "Integração Unnichat inativa para este agente" });
   }
 
-  // Resolve API key: per-agent key takes priority, falls back to global config
-  const unnichatApiKey = agente.unnichatApiKey || await getConfig("UNNICHAT_API_KEY");
+  // Resolve API key: da conexão vinculada ao agente
+  const unnichatApiKey = agente.conexaoUnnichat?.apiKey ?? agente.unnichatApiKey;
   if (!unnichatApiKey) {
-    return res.status(500).json({ error: "API Key Unnichat não configurada. Configure em Configurações → Unnichat." });
+    return res.status(500).json({ error: "Nenhuma conexão Unnichat configurada para este agente. Vincule uma conexão em Configurações → Unnichat." });
   }
 
   // 2. Extrai dados do payload (texto OU mídia)

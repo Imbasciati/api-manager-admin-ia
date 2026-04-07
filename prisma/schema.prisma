@@ -30,28 +30,42 @@ enum Perfil {
 }
 
 model Agente {
-  id                  String          @id @default(uuid())
+  id                  String           @id @default(uuid())
   nome                String
-  promptSistema       String          @db.Text
-  contextoProdutos    String?         @db.Text
-  tom                 Tom             @default(PROFISSIONAL)
-  modelo              String          @default("gpt-4o")
-  temperatura         Float           @default(0.7)
-  tokensMaximos       Int             @default(500)
-  ativo               Boolean         @default(true)
-  todosVendedores     Boolean         @default(true)
-  canalIntegracao     CanalIntegracao @default(NENHUM)
-  unnichatApiKey      String?         @db.Text
-  unnichatAtivo       Boolean         @default(false)
+  promptSistema       String           @db.Text
+  contextoProdutos    String?          @db.Text
+  tom                 Tom              @default(PROFISSIONAL)
+  modelo              String           @default("gpt-4o")
+  temperatura         Float            @default(0.7)
+  tokensMaximos       Int              @default(500)
+  ativo               Boolean          @default(true)
+  todosVendedores     Boolean          @default(true)
+  canalIntegracao     CanalIntegracao  @default(NENHUM)
+  unnichatApiKey      String?          @db.Text
+  unnichatAtivo       Boolean          @default(false)
   unnichatConexaoNome String?
+  conexaoUnnichatId   String?
+  conexaoUnnichat     ConexaoUnnichat? @relation(fields: [conexaoUnnichatId], references: [id], onDelete: SetNull)
   produto             String?
   atuacao             String?
   documentos          Documento[]
   vendedores          Usuario[]
-  criadoEm            DateTime        @default(now())
+  criadoEm            DateTime         @default(now())
   custos              CustoIA[]
   monitoramento       Monitoramento[]
   atendimentos        Atendimento[]
+}
+
+model ConexaoUnnichat {
+  id           String   @id @default(uuid())
+  nome         String
+  apiKey       String   @db.Text
+  ativo        Boolean  @default(true)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+  agentes      Agente[]
+
+  @@index([ativo])
 }
 
 enum CanalIntegracao {

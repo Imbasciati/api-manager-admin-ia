@@ -91,6 +91,13 @@ import {
 import { receberEvento } from "../controllers/webhook.controller";
 import { getCustosAtendimentos, getMensagens, getStatsDashboard, listProfissoes, listSessoes } from "../controllers/conversas.controller";
 import { listAgenteConfigs, updateAgenteConfig, deleteAgenteConfig } from "../controllers/agente-config.controller";
+import {
+  listConexoes,
+  createConexao,
+  updateConexao,
+  deleteConexao,
+  testarConexaoUnnichat as testarConexaoUnnichatConfig,
+} from "../controllers/conexao-unnichat.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { roleMiddleware } from "../middlewares/role.middleware";
 import { upload, memUpload } from "../middlewares/upload.middleware";
@@ -212,10 +219,17 @@ router.put("/configuracoes/webhooks/:id", authMiddleware, roleMiddleware(Perfil.
 router.post("/configuracoes/webhooks/:id/regenerar-token", authMiddleware, roleMiddleware(Perfil.ADMIN), regenerarToken);
 router.delete("/configuracoes/webhooks/:id", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteWebhook);
 
-// Configurações — Agente de Vendas IA (somente ADMIN)
+// Configurações — Agente de Vendas IA / ManyChat (somente ADMIN)
 router.get("/configuracoes/agente", authMiddleware, roleMiddleware(Perfil.ADMIN), listAgenteConfigs);
 router.put("/configuracoes/agente/:chave", authMiddleware, roleMiddleware(Perfil.ADMIN), updateAgenteConfig);
 router.delete("/configuracoes/agente/:chave", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteAgenteConfig);
+
+// Configurações — Conexões Unnichat (somente ADMIN)
+router.get("/configuracoes/unnichat/conexoes", authMiddleware, roleMiddleware(Perfil.ADMIN), listConexoes);
+router.post("/configuracoes/unnichat/conexoes", authMiddleware, roleMiddleware(Perfil.ADMIN), createConexao);
+router.put("/configuracoes/unnichat/conexoes/:id", authMiddleware, roleMiddleware(Perfil.ADMIN), updateConexao);
+router.delete("/configuracoes/unnichat/conexoes/:id", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteConexao);
+router.post("/configuracoes/unnichat/conexoes/:id/testar", authMiddleware, roleMiddleware(Perfil.ADMIN), testarConexaoUnnichatConfig);
 
 // Conversas Supabase — profissões / sessões / mensagens / stats / custos
 router.get("/conversas/stats", authMiddleware, getStatsDashboard);
