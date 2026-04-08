@@ -617,19 +617,26 @@ async function processarLoteMensagens(params: {
     return;
   }
 
-  // 7. Salva resposta da IA e transmite via SSE
-  const msgIA = await prisma.mensagemAtendimento.create({
-    data: {
-      atendimentoId: atendimento.id,
-      origem: "AGENTE_IA",
-      conteudo: respostaIA,
-    },
-  });
+  // 7. Divide em blocos e salva CADA BLOCO como mensagem separada
+  //    (cada bloco terá seu próprio ID → permite like/dislike por mensagem individual)
+  const blocos = splitMessageBlocks(respostaIA);
+  const blocosFinais = blocos.length > 0 ? blocos : [respostaIA];
+
+  for (const bloco of blocosFinais) {
+    const msgIA = await prisma.mensagemAtendimento.create({
+      data: {
+        atendimentoId: atendimento.id,
+        origem: "AGENTE_IA",
+        conteudo: bloco,
+      },
+    });
+    broadcast("nova_mensagem", { atendimentoId: atendimento.id, mensagem: msgIA });
+  }
+
   await prisma.atendimento.update({
     where: { id: atendimento.id },
     data: { atualizadoEm: new Date() },
   });
-  broadcast("nova_mensagem", { atendimentoId: atendimento.id, mensagem: msgIA });
 
   // 8. Atualiza memória contextual (mantém últimas 20 trocas = 40 mensagens)
   const novoHistorico: HistoricoMensagem[] = [
@@ -644,12 +651,11 @@ async function processarLoteMensagens(params: {
     update: { historico: novoHistorico },
   });
 
-  // 9. Envia resposta ao Unnichat em blocos separados com delay humanizado
-  const blocos = splitMessageBlocks(respostaIA);
-  for (let i = 0; i < blocos.length; i++) {
-    await enviarMensagem(unnichatApiKey, telefone, blocos[i]);
-    if (i < blocos.length - 1) {
-      await sleep(calcMessageDelay(blocos[i]));
+  // 9. Envia cada bloco ao Unnichat com delay humanizado entre eles
+  for (let i = 0; i < blocosFinais.length; i++) {
+    await enviarMensagem(unnichatApiKey, telefone, blocosFinais[i]);
+    if (i < blocosFinais.length - 1) {
+      await sleep(calcMessageDelay(blocosFinais[i]));
     }
   }
 
