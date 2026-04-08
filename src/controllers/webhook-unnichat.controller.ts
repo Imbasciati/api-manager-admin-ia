@@ -54,6 +54,7 @@ function detectarTipoPorUrl(url: string): MidiaTipo {
   if (/\.(ogg|mp3|wav|m4a|aac|opus|oga|mp4a)$/.test(clean)) return "audio";
   if (/\.(jpg|jpeg|png|gif|webp|bmp|svg|heic|heif)$/.test(clean)) return "image";
   return "text";
+  
 }
 
 /**
