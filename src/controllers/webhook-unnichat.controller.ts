@@ -15,19 +15,21 @@ interface PayloadExtraido {
   contactId: string;
   telefone: string;
   nome: string | null;
-  texto: string;       // texto da mensagem (vazio para áudio/imagem puro)
+  texto: string;        // texto da mensagem (vazio para áudio/imagem puro)
   tipo: MidiaTipo;
-  mediaUrl?: string;   // URL da mídia quando tipo = audio | image
+  mediaUrl?: string;    // URL da mídia quando tipo = audio | image
+  produtoTag?: string;  // campo "produto" enviado pelo Unnichat — usado para triagem em agentes de Produtos Variados
 }
 
 /**
- * Contexto em memória por contactId — guarda agente, telefone e nome
- * do lead entre o recebimento e o processamento após o debounce.
+ * Contexto em memória por contactId — guarda agente, telefone, nome e
+ * produto do lead entre o recebimento e o processamento após o debounce.
  */
 const pendingContexts = new Map<string, {
   agenteId: string;
   telefone: string;
   nome: string | null;
+  produtoTag?: string;
 }>();
 
 /**
@@ -106,6 +108,9 @@ function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
     // Rejeita se não tem nem texto nem URL de mídia
     if (!texto && !mediaUrl) return null;
 
+    // Campo "produto" enviado pelo Unnichat na estrutura de automação
+    const produtoTag = d.produto ? String(d.produto).trim() : undefined;
+
     return {
       contactId: String(d.id ?? phone),
       telefone: normalizePhone(phone),
@@ -113,6 +118,7 @@ function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
       texto,
       tipo,
       mediaUrl,
+      produtoTag: produtoTag || undefined,
     };
   }
 
@@ -348,7 +354,7 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
     return res.status(200).json({ ok: true, ignorado: true, motivo: "Payload sem conteúdo" });
   }
 
-  const { telefone, nome, texto, tipo, mediaUrl } = payload;
+  const { telefone, nome, texto, tipo, mediaUrl, produtoTag } = payload;
 
   // Namespacing por agente: garante isolamento total de memória e buffer entre agentes.
   // O mesmo número de telefone pode falar com agentes diferentes sem cruzar histórico.
@@ -386,6 +392,9 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
         agenteId: agente.id,
         telefone,
         nome: nome ?? ctxAnterior?.nome ?? null,
+        // produtoTag: mantém o valor mais recente — se o lead enviou várias msgs,
+        // a última que trouxer o campo vence; caso não venha, preserva o anterior.
+        produtoTag: produtoTag ?? ctxAnterior?.produtoTag,
       });
 
       // Cria ou recupera o atendimento imediatamente (não espera debounce)
@@ -440,6 +449,7 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
           contactId: cId,
           telefone: ctx.telefone,
           nome: ctx.nome,
+          produtoTag: ctx.produtoTag,
         }).catch((err) => {
           console.error("[UNNICHAT] Erro ao processar lote:", err instanceof Error ? err.message : err);
         });
@@ -454,6 +464,79 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
  * Processa todas as mensagens pendentes no buffer para um contactId.
  * Transcreve áudio e analisa imagens antes de enviar para a IA.
  */
+/** Interface de um produto variado armazenado em contextoProdutos (JSON) */
+interface ProdutoVariadoCtx {
+  nome: string;
+  descricao?: string;
+  linkVendas?: string;
+  valorProduto?: string;
+  valorParcelado?: string;
+  formasPagamento?: string;
+}
+
+/**
+ * Quando o agente é do tipo Produtos Variados (`produto === "PRODUTOS_VARIADOS"`),
+ * resolve o contexto correto a partir do campo `produtoTag` vindo do payload.
+ *
+ * Algoritmo de matching (em ordem de prioridade):
+ *   1. Correspondência exata (case-insensitive)
+ *   2. Nome do produto contém a tag ou vice-versa
+ *   3. Fallback: inclui todos os produtos no contexto
+ */
+function resolverContextoProdutoVariado(
+  contextoProdutosJson: string,
+  produtoTag: string | undefined,
+): string {
+  let produtos: ProdutoVariadoCtx[] = [];
+
+  try {
+    const parsed = JSON.parse(contextoProdutosJson);
+    if (Array.isArray(parsed)) produtos = parsed as ProdutoVariadoCtx[];
+  } catch {
+    return contextoProdutosJson; // não é JSON — retorna como está
+  }
+
+  if (produtos.length === 0) return contextoProdutosJson;
+
+  const formatarProduto = (p: ProdutoVariadoCtx) => {
+    const linhas = [`Produto: ${p.nome}`];
+    if (p.descricao)       linhas.push(`Descrição: ${p.descricao}`);
+    if (p.valorProduto)    linhas.push(`Valor: ${p.valorProduto}`);
+    if (p.valorParcelado)  linhas.push(`Parcelamento: ${p.valorParcelado}`);
+    if (p.formasPagamento) linhas.push(`Formas de pagamento: ${p.formasPagamento}`);
+    if (p.linkVendas)      linhas.push(`Link de compra: ${p.linkVendas}`);
+    return linhas.join("\n");
+  };
+
+  if (!produtoTag) {
+    // Sem tag: passa todos os produtos como contexto
+    console.log("[UNNICHAT] produtoTag ausente — usando todos os produtos variados como contexto");
+    return produtos.map(formatarProduto).join("\n\n---\n\n");
+  }
+
+  const tagLower = produtoTag.toLowerCase().trim();
+
+  // 1. Exato
+  let encontrado = produtos.find((p) => p.nome.toLowerCase().trim() === tagLower);
+
+  // 2. Contém
+  if (!encontrado) {
+    encontrado = produtos.find(
+      (p) => p.nome.toLowerCase().includes(tagLower) || tagLower.includes(p.nome.toLowerCase().trim()),
+    );
+  }
+
+  if (encontrado) {
+    console.log(`[UNNICHAT] Produto identificado pela tag "${produtoTag}": "${encontrado.nome}"`);
+    return formatarProduto(encontrado);
+  }
+
+  // 3. Fallback: todos os produtos + aviso
+  console.warn(`[UNNICHAT] Nenhum produto encontrado para tag "${produtoTag}" — enviando todos como contexto`);
+  return `[Produto solicitado: "${produtoTag}" — não encontrado na lista. Contexto completo abaixo:]\n\n` +
+    produtos.map(formatarProduto).join("\n\n---\n\n");
+}
+
 async function processarLoteMensagens(params: {
   agente: {
     id: string;
@@ -463,14 +546,16 @@ async function processarLoteMensagens(params: {
     tokensMaximos: number;
     promptSistema: string;
     contextoProdutos: string | null;
+    produto: string | null;
     unnichatApiKey: string | null;
   };
   unnichatApiKey: string;
   contactId: string;
   telefone: string;
   nome: string | null;
+  produtoTag?: string;
 }) {
-  const { agente, unnichatApiKey, contactId, telefone } = params;
+  const { agente, unnichatApiKey, contactId, telefone, produtoTag } = params;
 
   // 1. Busca todas as mensagens pendentes no buffer (em ordem de chegada)
   const mensagensBuffer = await getPendingMessages(contactId);
@@ -567,7 +652,16 @@ async function processarLoteMensagens(params: {
     }
   }
 
-  // 5. Chama a IA com o bloco combinado e resolvido
+  // 5. Resolve contexto de produto (triagem para Produtos Variados)
+  //    Para agentes normais: usa contextoProdutos direto.
+  //    Para Produtos Variados: resolve o produto correto pelo campo "produto" do payload.
+  let contextoProdutosResolvido = agente.contextoProdutos;
+
+  if (agente.produto === "PRODUTOS_VARIADOS" && agente.contextoProdutos) {
+    contextoProdutosResolvido = resolverContextoProdutoVariado(agente.contextoProdutos, produtoTag);
+  }
+
+  // 6. Chama a IA com o bloco combinado e resolvido
   const inicio = Date.now();
   let respostaIA = "";
   let inputTokens = 0;
@@ -581,7 +675,7 @@ async function processarLoteMensagens(params: {
         temperatura: agente.temperatura,
         tokensMaximos: agente.tokensMaximos,
         promptSistema: agente.promptSistema,
-        contextoProdutos: agente.contextoProdutos,
+        contextoProdutos: contextoProdutosResolvido,
         agenteId: agente.id,
       },
       historico,
@@ -597,7 +691,7 @@ async function processarLoteMensagens(params: {
 
   const duracao = Date.now() - inicio;
 
-  // 6. Registra execução com custo real (tokens captados de todos os provedores)
+  // 7. Registra execução com custo real (tokens captados de todos os provedores)
   await logExecucao({
     contactId,
     agenteId: agente.id,
@@ -617,7 +711,7 @@ async function processarLoteMensagens(params: {
     return;
   }
 
-  // 7. Divide em blocos e salva CADA BLOCO como mensagem separada
+  // 8. Divide em blocos e salva CADA BLOCO como mensagem separada
   //    (cada bloco terá seu próprio ID → permite like/dislike por mensagem individual)
   const blocos = splitMessageBlocks(respostaIA);
   const blocosFinais = blocos.length > 0 ? blocos : [respostaIA];
@@ -638,7 +732,7 @@ async function processarLoteMensagens(params: {
     data: { atualizadoEm: new Date() },
   });
 
-  // 8. Atualiza memória contextual (mantém últimas 20 trocas = 40 mensagens)
+  // 9. Atualiza memória contextual (mantém últimas 20 trocas = 40 mensagens)
   const novoHistorico: HistoricoMensagem[] = [
     ...historico,
     { role: "user" as const, content: textosCombinados },
@@ -651,7 +745,7 @@ async function processarLoteMensagens(params: {
     update: { historico: novoHistorico },
   });
 
-  // 9. Envia cada bloco ao Unnichat com delay humanizado entre eles
+  // 10. Envia cada bloco ao Unnichat com delay humanizado entre eles
   for (let i = 0; i < blocosFinais.length; i++) {
     await enviarMensagem(unnichatApiKey, telefone, blocosFinais[i]);
     if (i < blocosFinais.length - 1) {
@@ -659,10 +753,10 @@ async function processarLoteMensagens(params: {
     }
   }
 
-  // 10. Marca todas as mensagens do buffer como processadas
+  // 11. Marca todas as mensagens do buffer como processadas
   await markProcessed(mensagensBuffer.map((m) => m.id));
 
-  // 11. Loga resultado do processamento para monitoramento
+  // 12. Loga resultado do processamento para monitoramento
   void logEvento({
     agenteId: agente.id,
     tipo: "LOTE_PROCESSADO",
