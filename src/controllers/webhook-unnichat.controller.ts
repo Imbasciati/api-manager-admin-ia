@@ -473,6 +473,7 @@ interface ProdutoVariadoCtx {
   valorProduto?: string;
   valorParcelado?: string;
   formasPagamento?: string;
+  checkoutIdFirepay?: string;
 }
 
 /**
