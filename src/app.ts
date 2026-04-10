@@ -35,7 +35,7 @@ app.use(compression());
 app.use(
   cors({
     origin: (origin, callback) => {
-      const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:5173,http://localhost:5174,https://front-manager-ia-dev.betaonline.com.br,https://front-manager-ia.betaonline.com.br")
+      const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:5173,http://localhost:5174,https://front-manager-ia-dev.betaonline.com.br,https://front-manager-ia.betaonline.com.br,https://api-ia.betaonline.com.br")
         .split(",")
         .map((o) => o.trim());
 

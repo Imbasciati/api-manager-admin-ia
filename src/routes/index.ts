@@ -92,7 +92,7 @@ import {
 import { receberEvento } from "../controllers/webhook.controller";
 import { getCustosAtendimentos, getMensagens, getStatsDashboard, listProfissoes, listSessoes } from "../controllers/conversas.controller";
 import { listAgenteConfigs, updateAgenteConfig, deleteAgenteConfig } from "../controllers/agente-config.controller";
-import { getFirepayConfig, saveFirepayApiKey, deleteFirepayApiKey, buscarCheckoutFirepay } from "../controllers/firepay.controller";
+import { getFirepayConfig, saveFirepayApiKey, deleteFirepayApiKey, buscarCheckoutFirepay, testarFirepayApiKey } from "../controllers/firepay.controller";
 import {
   listConexoes,
   createConexao,
@@ -231,6 +231,7 @@ router.delete("/configuracoes/agente/:chave", authMiddleware, roleMiddleware(Per
 router.get("/configuracoes/firepay", authMiddleware, roleMiddleware(Perfil.ADMIN), getFirepayConfig);
 router.put("/configuracoes/firepay", authMiddleware, roleMiddleware(Perfil.ADMIN), saveFirepayApiKey);
 router.delete("/configuracoes/firepay", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteFirepayApiKey);
+router.post("/configuracoes/firepay/testar", authMiddleware, roleMiddleware(Perfil.ADMIN), testarFirepayApiKey);
 router.get("/configuracoes/firepay/checkout/:id", authMiddleware, buscarCheckoutFirepay);
 
 // Configurações — Conexões Unnichat (ADMIN e SUPERVISOR)
