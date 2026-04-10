@@ -48,7 +48,7 @@ export const deleteFirepayApiKey = asyncHandler(async (_req: Request, res: Respo
  * Retorna o payload bruto para o frontend mapear link + valor.
  */
 export const buscarCheckoutFirepay = asyncHandler(async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(req.params.id ?? "");
 
   if (!id || !/^\d+$/.test(id)) {
     return fail(res, 400, "ID do checkout deve ser numérico", "VALIDATION_ERROR");
