@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../utils/asyncHandler";
 import { ok, fail } from "../utils/response";
 import { prisma } from "../prisma/client";
+import { registrarErro } from "../utils/registrarErro";
 
 const CHAVE = "FIREPAY_API_KEY";
 const FIREPAY_BASE = "https://admin.firepay.com.br";
@@ -44,18 +45,24 @@ export const deleteFirepayApiKey = asyncHandler(async (_req: Request, res: Respo
 
 /**
  * POST /configuracoes/firepay/testar
- * Valida se a API Key configurada consegue autenticar na FirePay.
+ * Valida se a API Key consegue autenticar na FirePay fazendo uma chamada real.
  */
-export const testarFirepayApiKey = asyncHandler(async (_req: Request, res: Response) => {
+export const testarFirepayApiKey = asyncHandler(async (req: Request, res: Response) => {
   const config = await prisma.configuracaoAgente.findUnique({ where: { chave: CHAVE } });
   if (!config?.valor) {
     return fail(res, 400, "API Key da FirePay não configurada.", "NOT_CONFIGURED");
   }
 
-  // Usa o endpoint de transactions com um intervalo mínimo só para testar autenticação
+  // Janela de 7 dias recentes — dentro do limite de 180 dias da API
+  const hoje = new Date();
+  const seteDiasAtras = new Date(hoje);
+  seteDiasAtras.setDate(hoje.getDate() - 7);
+  const finalDate = hoje.toISOString().split("T")[0] as string;
+  const startDate = seteDiasAtras.toISOString().split("T")[0] as string;
+
   const url = new URL(`${FIREPAY_BASE}/api/public/transactions`);
-  url.searchParams.set("startDate", "2025-01-01");
-  url.searchParams.set("finalDate", "2025-01-01");
+  url.searchParams.set("startDate", startDate);
+  url.searchParams.set("finalDate", finalDate);
 
   let response: globalThis.Response;
   try {
@@ -67,22 +74,25 @@ export const testarFirepayApiKey = asyncHandler(async (_req: Request, res: Respo
         "Content-Type": "application/json",
       },
     });
-  } catch {
+  } catch (err) {
+    const msg = `FirePay — falha de conexão ao testar API Key: ${err instanceof Error ? err.message : String(err)}`;
+    registrarErro(msg, { req, severidade: "CRITICAL", categoria: "FirePay", origem: "backend" });
     return fail(res, 502, "Não foi possível conectar à API da FirePay.", "FIREPAY_UNAVAILABLE");
   }
 
   if (response.status === 401 || response.status === 403) {
+    registrarErro(
+      `FirePay — API Key inválida ou sem permissão (HTTP ${response.status})`,
+      { req, severidade: "ERROR", categoria: "FirePay", origem: "backend" },
+    );
     return fail(res, 401, "API Key inválida ou sem permissão.", "INVALID_KEY");
   }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    return fail(
-      res,
-      502,
-      `FirePay retornou erro ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`,
-      "FIREPAY_ERROR",
-    );
+    const msg = `FirePay — erro ao testar conexão (HTTP ${response.status})${text ? `: ${text.slice(0, 500)}` : ""}`;
+    registrarErro(msg, { req, severidade: "ERROR", categoria: "FirePay", origem: "backend" });
+    return fail(res, 502, `FirePay retornou erro ${response.status}`, "FIREPAY_ERROR");
   }
 
   return ok(res, { conectado: true });
@@ -90,8 +100,8 @@ export const testarFirepayApiKey = asyncHandler(async (_req: Request, res: Respo
 
 /**
  * GET /configuracoes/firepay/checkout/:id
- * Consulta os dados de um checkout na API da FirePay pelo checkoutId.
- * Usa GET /api/public/transactions?checkoutId={id} (único endpoint público documentado).
+ * Consulta transações de um checkout na API da FirePay para validar o ID.
+ * A API pública só retorna totais agregados (total_sales_count, total_sales_value).
  */
 export const buscarCheckoutFirepay = asyncHandler(async (req: Request, res: Response) => {
   const id = String(req.params.id ?? "");
@@ -110,15 +120,18 @@ export const buscarCheckoutFirepay = asyncHandler(async (req: Request, res: Resp
     );
   }
 
-  // Intervalo de 5 anos para garantir que o checkout seja encontrado
-  const today = new Date().toISOString().split("T")[0] as string;
-  const fiveYearsAgo = new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0] as string;
+  // A API da FirePay aceita no máximo 180 dias por janela.
+  // Usamos os últimos 30 dias como janela padrão de verificação.
+  const hoje = new Date();
+  const trintaDiasAtras = new Date(hoje);
+  trintaDiasAtras.setDate(hoje.getDate() - 30);
+  const finalDate = hoje.toISOString().split("T")[0] as string;
+  const startDate = trintaDiasAtras.toISOString().split("T")[0] as string;
 
   const url = new URL(`${FIREPAY_BASE}/api/public/transactions`);
   url.searchParams.set("checkoutId", id);
-  url.searchParams.set("startDate", fiveYearsAgo);
-  url.searchParams.set("finalDate", today);
-  url.searchParams.set("per-page", "1");
+  url.searchParams.set("startDate", startDate);
+  url.searchParams.set("finalDate", finalDate);
 
   let response: globalThis.Response;
   try {
@@ -130,12 +143,21 @@ export const buscarCheckoutFirepay = asyncHandler(async (req: Request, res: Resp
         "Content-Type": "application/json",
       },
     });
-  } catch {
+  } catch (err) {
+    const msg = `FirePay — falha de conexão ao buscar checkout ${id}: ${err instanceof Error ? err.message : String(err)}`;
+    registrarErro(msg, { req, severidade: "CRITICAL", categoria: "FirePay", origem: "backend" });
     return fail(res, 502, "Não foi possível conectar à API da FirePay", "FIREPAY_UNAVAILABLE");
   }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
+    const msg = `FirePay — erro ao buscar checkout ${id} (HTTP ${response.status})${text ? `: ${text.slice(0, 500)}` : ""}`;
+    registrarErro(msg, {
+      req,
+      severidade: response.status >= 500 ? "CRITICAL" : "ERROR",
+      categoria: "FirePay",
+      origem: "backend",
+    });
     return fail(
       res,
       response.status >= 500 ? 502 : response.status,
