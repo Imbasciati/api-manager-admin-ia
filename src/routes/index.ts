@@ -92,6 +92,7 @@ import {
 import { receberEvento } from "../controllers/webhook.controller";
 import { getCustosAtendimentos, getMensagens, getStatsDashboard, listProfissoes, listSessoes } from "../controllers/conversas.controller";
 import { listAgenteConfigs, updateAgenteConfig, deleteAgenteConfig } from "../controllers/agente-config.controller";
+import { getFirepayConfig, saveFirepayApiKey, deleteFirepayApiKey, buscarCheckoutFirepay } from "../controllers/firepay.controller";
 import {
   listConexoes,
   createConexao,
@@ -225,6 +226,12 @@ router.delete("/configuracoes/webhooks/:id", authMiddleware, roleMiddleware(Perf
 router.get("/configuracoes/agente", authMiddleware, roleMiddleware(Perfil.ADMIN), listAgenteConfigs);
 router.put("/configuracoes/agente/:chave", authMiddleware, roleMiddleware(Perfil.ADMIN), updateAgenteConfig);
 router.delete("/configuracoes/agente/:chave", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteAgenteConfig);
+
+// Configurações — FirePay (somente ADMIN)
+router.get("/configuracoes/firepay", authMiddleware, roleMiddleware(Perfil.ADMIN), getFirepayConfig);
+router.put("/configuracoes/firepay", authMiddleware, roleMiddleware(Perfil.ADMIN), saveFirepayApiKey);
+router.delete("/configuracoes/firepay", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteFirepayApiKey);
+router.get("/configuracoes/firepay/checkout/:id", authMiddleware, buscarCheckoutFirepay);
 
 // Configurações — Conexões Unnichat (ADMIN e SUPERVISOR)
 router.get("/configuracoes/unnichat/conexoes", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), listConexoes);
