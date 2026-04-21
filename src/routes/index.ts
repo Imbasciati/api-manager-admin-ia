@@ -100,6 +100,16 @@ import {
   deleteConexao,
   testarConexaoUnnichat as testarConexaoUnnichatConfig,
 } from "../controllers/conexao-unnichat.controller";
+import {
+  listConexoesWABA,
+  conectarViaOAuth,
+  createConexaoWABA,
+  updateConexaoWABA,
+  deleteConexaoWABA,
+  testarConexaoWABA,
+  listarTemplatesWABA,
+} from "../controllers/conexao-waba.controller";
+import { verificarWebhookWABA, receberEventoWABA } from "../controllers/webhook-waba.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { roleMiddleware } from "../middlewares/role.middleware";
 import { upload, memUpload } from "../middlewares/upload.middleware";
@@ -146,6 +156,12 @@ router.post("/agentes/:id/unnichat/testar", authMiddleware, testarConexaoUnnicha
 
 // Webhook Unnichat — público (sem JWT)
 router.post("/webhook/unnichat/:agenteId", receberMensagemUnnichat);
+
+// Webhook WABA (Meta) — público (sem JWT)
+// GET: verificação do endpoint pela Meta
+// POST: recebe eventos (mensagens, status)
+router.get("/webhook/waba",  verificarWebhookWABA);
+router.post("/webhook/waba", receberEventoWABA);
 
 router.get("/monitoramento/vendedores", authMiddleware, vendedoresOnline);
 router.get("/monitoramento/agentes", authMiddleware, agentesStatus);
@@ -233,6 +249,15 @@ router.put("/configuracoes/firepay", authMiddleware, roleMiddleware(Perfil.ADMIN
 router.delete("/configuracoes/firepay", authMiddleware, roleMiddleware(Perfil.ADMIN), deleteFirepayApiKey);
 router.post("/configuracoes/firepay/testar", authMiddleware, roleMiddleware(Perfil.ADMIN), testarFirepayApiKey);
 router.get("/configuracoes/firepay/checkout/:id", authMiddleware, buscarCheckoutFirepay);
+
+// Configurações — Conexões WABA (ADMIN e SUPERVISOR)
+router.get("/configuracoes/waba/conexoes",                    authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), listConexoesWABA);
+router.post("/configuracoes/waba/oauth/callback",             authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), conectarViaOAuth);
+router.post("/configuracoes/waba/conexoes",                   authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), createConexaoWABA);
+router.put("/configuracoes/waba/conexoes/:id",                authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), updateConexaoWABA);
+router.delete("/configuracoes/waba/conexoes/:id",             authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), deleteConexaoWABA);
+router.post("/configuracoes/waba/conexoes/:id/testar",        authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), testarConexaoWABA);
+router.get("/configuracoes/waba/conexoes/:id/templates",      authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), listarTemplatesWABA);
 
 // Configurações — Conexões Unnichat (ADMIN e SUPERVISOR)
 router.get("/configuracoes/unnichat/conexoes", authMiddleware, roleMiddleware(Perfil.ADMIN, Perfil.SUPERVISOR), listConexoes);

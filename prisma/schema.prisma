@@ -46,6 +46,9 @@ model Agente {
   unnichatConexaoNome String?
   conexaoUnnichatId   String?
   conexaoUnnichat     ConexaoUnnichat? @relation(fields: [conexaoUnnichatId], references: [id], onDelete: SetNull)
+  conexaoWABAId       String?
+  conexaoWABA         ConexaoWABA?     @relation(fields: [conexaoWABAId], references: [id], onDelete: SetNull)
+  wabaAtivo           Boolean          @default(false)
   produto             String?
   atuacao             String?
   documentos          Documento[]
@@ -69,11 +72,28 @@ model ConexaoUnnichat {
   @@index([ativo])
 }
 
+model ConexaoWABA {
+  id            String   @id @default(uuid())
+  nome          String
+  wabaId        String   @db.Text
+  phoneNumberId String   @db.Text
+  accessToken   String   @db.Text
+  displayPhone  String?
+  qualidade     String?
+  ativo         Boolean  @default(true)
+  criadoEm      DateTime @default(now())
+  atualizadoEm  DateTime @updatedAt
+  agentes       Agente[]
+
+  @@index([ativo])
+}
+
 enum CanalIntegracao {
   NENHUM
   UNNICHAT
   MANYCHAT
   AMBOS
+  WABA
 }
 
 enum Tom {
