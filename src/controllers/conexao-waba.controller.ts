@@ -9,35 +9,37 @@ function maskToken(token: string): string {
   return `${token.slice(0, 4)}...${token.slice(-4)}`;
 }
 
-function formatarConexao(c: {
-  id: string;
-  nome: string;
-  wabaId: string;
+type ConexaoComCount = {
+  id:            string;
+  nome:          string;
+  wabaId:        string;
   phoneNumberId: string;
-  accessToken: string;
-  displayPhone: string | null;
-  qualidade: string | null;
-  ativo: boolean;
-  criadoEm: Date;
-  _count: { agentes: number };
-}) {
+  accessToken:   string;
+  displayPhone:  string | null;
+  qualidade:     string | null;
+  ativo:         boolean;
+  criadoEm:      Date;
+  _count:        { agentes: number };
+};
+
+function formatarConexao(c: ConexaoComCount) {
   return {
-    id:                 c.id,
-    nome:               c.nome,
-    wabaId:             c.wabaId,
-    phoneNumberId:      c.phoneNumberId,
-    accessTokenMasked:  maskToken(c.accessToken),
-    displayPhone:       c.displayPhone,
-    qualidade:          c.qualidade,
-    ativo:              c.ativo,
-    agentesCount:       c._count.agentes,
-    criadoEm:           c.criadoEm,
+    id:                c.id,
+    nome:              c.nome,
+    wabaId:            c.wabaId,
+    phoneNumberId:     c.phoneNumberId,
+    accessTokenMasked: maskToken(c.accessToken),
+    displayPhone:      c.displayPhone,
+    qualidade:         c.qualidade,
+    ativo:             c.ativo,
+    agentesCount:      c._count.agentes,
+    criadoEm:          c.criadoEm,
   };
 }
 
 // ── list ──────────────────────────────────────────────────────────────────────
 
-export async function listConexoesWABA(req: Request, res: Response) {
+export async function listConexoesWABA(_req: Request, res: Response) {
   try {
     const conexoes = await prisma.conexaoWABA.findMany({
       orderBy: { criadoEm: "desc" },
@@ -50,7 +52,6 @@ export async function listConexoesWABA(req: Request, res: Response) {
 }
 
 // ── OAuth Embedded Signup ─────────────────────────────────────────────────────
-// Recebe o `code` retornado pelo popup do Meta, troca por token e salva a conexão.
 
 export async function conectarViaOAuth(req: Request, res: Response) {
   const { code, nome } = req.body as { code?: string; nome?: string };
@@ -84,7 +85,6 @@ export async function conectarViaOAuth(req: Request, res: Response) {
 }
 
 // ── create manual ─────────────────────────────────────────────────────────────
-// Permite criar a conexão inserindo as credenciais manualmente (sem Embedded Signup).
 
 export async function createConexaoWABA(req: Request, res: Response) {
   const { nome, wabaId, phoneNumberId, accessToken } = req.body as {
@@ -95,12 +95,20 @@ export async function createConexaoWABA(req: Request, res: Response) {
   };
 
   if (!nome?.trim() || !wabaId?.trim() || !phoneNumberId?.trim() || !accessToken?.trim()) {
-    return res.status(400).json({ success: false, error: "nome, wabaId, phoneNumberId e accessToken são obrigatórios" });
+    return res.status(400).json({
+      success: false,
+      error: "nome, wabaId, phoneNumberId e accessToken são obrigatórios",
+    });
   }
 
   try {
     const conexao = await prisma.conexaoWABA.create({
-      data: { nome: nome.trim(), wabaId: wabaId.trim(), phoneNumberId: phoneNumberId.trim(), accessToken: accessToken.trim() },
+      data: {
+        nome:          nome.trim(),
+        wabaId:        wabaId.trim(),
+        phoneNumberId: phoneNumberId.trim(),
+        accessToken:   accessToken.trim(),
+      },
       include: { _count: { select: { agentes: true } } },
     });
     res.json({ success: true, data: formatarConexao(conexao) });
@@ -112,7 +120,7 @@ export async function createConexaoWABA(req: Request, res: Response) {
 // ── update ────────────────────────────────────────────────────────────────────
 
 export async function updateConexaoWABA(req: Request, res: Response) {
-  const { id } = req.params;
+  const id = String(req.params.id);
   const { nome, accessToken } = req.body as { nome?: string; accessToken?: string };
 
   try {
@@ -133,7 +141,7 @@ export async function updateConexaoWABA(req: Request, res: Response) {
 // ── delete ────────────────────────────────────────────────────────────────────
 
 export async function deleteConexaoWABA(req: Request, res: Response) {
-  const { id } = req.params;
+  const id = String(req.params.id);
 
   try {
     const conexao = await prisma.conexaoWABA.findUnique({
@@ -141,7 +149,9 @@ export async function deleteConexaoWABA(req: Request, res: Response) {
       include: { _count: { select: { agentes: true } } },
     });
 
-    if (!conexao) return res.status(404).json({ success: false, error: "Conexão não encontrada" });
+    if (!conexao) {
+      return res.status(404).json({ success: false, error: "Conexão não encontrada" });
+    }
 
     if (conexao._count.agentes > 0) {
       return res.status(400).json({
@@ -160,28 +170,32 @@ export async function deleteConexaoWABA(req: Request, res: Response) {
 // ── testar ────────────────────────────────────────────────────────────────────
 
 export async function testarConexaoWABA(req: Request, res: Response) {
-  const { id } = req.params;
+  const id = String(req.params.id);
 
   try {
     const conexao = await prisma.conexaoWABA.findUnique({ where: { id } });
-    if (!conexao) return res.status(404).json({ success: false, error: "Conexão não encontrada" });
+    if (!conexao) {
+      return res.status(404).json({ success: false, error: "Conexão não encontrada" });
+    }
 
     const resultado = await wabaService.testarConexao(conexao.phoneNumberId, conexao.accessToken);
     res.json({ success: true, data: resultado });
   } catch (err: unknown) {
     const e = err as { message?: string };
-    res.status(500).json({ success: true, data: { ok: false, mensagem: e?.message ?? "Erro no teste" } });
+    res.status(500).json({ success: false, data: { ok: false, mensagem: e?.message ?? "Erro no teste" } });
   }
 }
 
 // ── templates ─────────────────────────────────────────────────────────────────
 
 export async function listarTemplatesWABA(req: Request, res: Response) {
-  const { id } = req.params;
+  const id = String(req.params.id);
 
   try {
     const conexao = await prisma.conexaoWABA.findUnique({ where: { id } });
-    if (!conexao) return res.status(404).json({ success: false, error: "Conexão não encontrada" });
+    if (!conexao) {
+      return res.status(404).json({ success: false, error: "Conexão não encontrada" });
+    }
 
     const templates = await wabaService.listarTemplates(conexao.wabaId, conexao.accessToken);
     res.json({ success: true, data: templates });
