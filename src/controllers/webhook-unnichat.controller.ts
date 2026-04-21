@@ -15,10 +15,12 @@ interface PayloadExtraido {
   contactId: string;
   telefone: string;
   nome: string | null;
-  texto: string;        // texto da mensagem (vazio para áudio/imagem puro)
+  texto: string;           // texto da mensagem (vazio para áudio/imagem puro)
   tipo: MidiaTipo;
-  mediaUrl?: string;    // URL da mídia quando tipo = audio | image
-  produtoTag?: string;  // campo "produto" enviado pelo Unnichat — usado para triagem em agentes de Produtos Variados
+  mediaUrl?: string;       // URL da mídia quando tipo = audio | image
+  produtoTag?: string;     // campo "produto" do Unnichat — fallback de roteamento por nome
+  checkoutId?: string;     // Checkout_ID do Unnichat — roteamento primário em Produtos Variados
+  valorCarrinho?: string;  // Valor do carrinho abandonado — contexto adicional para a IA
 }
 
 /**
@@ -30,6 +32,8 @@ const pendingContexts = new Map<string, {
   telefone: string;
   nome: string | null;
   produtoTag?: string;
+  checkoutId?: string;
+  valorCarrinho?: string;
 }>();
 
 /**
@@ -82,6 +86,39 @@ function detectarTipo(rawTipo?: string, url?: string): MidiaTipo {
  *    { "phone": "...", "name": "...", "message": "...", "type": "audio" }
  */
 function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
+  // ── Formato 4: Unnichat Automação com raw wrapper ─────────────────────────────
+  // { "raw": { "data": { "phoneNumber", "Checkout_ID", "Valor", "produto", ... } }, "texto": "..." }
+  if (body.raw && typeof body.raw === "object") {
+    const raw = body.raw as Record<string, unknown>;
+    if (raw.data && typeof raw.data === "object") {
+      const d = raw.data as Record<string, unknown>;
+      const phone = String(d.phoneNumber ?? d.phone ?? d.telefone ?? body.telefone ?? "");
+      if (phone) {
+        const rawContent = String(
+          body.texto ?? body.text ??
+          d.message ?? d.text ?? d.mensagem ?? ""
+        ).trim();
+        const rawMediaUrl = String(d.mediaUrl ?? d.url ?? d.media ?? "").trim() || rawContent;
+        const tipo = detectarTipo(String(d.type ?? body.tipo ?? ""), rawMediaUrl);
+        const mediaUrl = tipo !== "text" ? rawMediaUrl || undefined : undefined;
+        const texto = tipo === "text" ? rawContent : "";
+        if (texto || mediaUrl) {
+          return {
+            contactId: String(d.id ?? phone),
+            telefone: normalizePhone(phone),
+            nome: d.name ? String(d.name) : (body.nome ? String(body.nome) : null),
+            texto,
+            tipo,
+            mediaUrl,
+            produtoTag: d.produto ? String(d.produto).trim() : undefined,
+            checkoutId: d.Checkout_ID ? String(d.Checkout_ID).trim() : undefined,
+            valorCarrinho: d.Valor ? String(d.Valor).trim() : undefined,
+          };
+        }
+      }
+    }
+  }
+
   // ── Formato 1: Unnichat Automação { data: { phoneNumber, ... } } ──────────────
   if (body.data && typeof body.data === "object") {
     const d = body.data as Record<string, unknown>;
@@ -109,8 +146,9 @@ function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
     // Rejeita se não tem nem texto nem URL de mídia
     if (!texto && !mediaUrl) return null;
 
-    // Campo "produto" enviado pelo Unnichat na estrutura de automação
     const produtoTag = d.produto ? String(d.produto).trim() : undefined;
+    const checkoutId = d.Checkout_ID ? String(d.Checkout_ID).trim() : undefined;
+    const valorCarrinho = d.Valor ? String(d.Valor).trim() : undefined;
 
     return {
       contactId: String(d.id ?? phone),
@@ -120,6 +158,8 @@ function extrairPayload(body: Record<string, unknown>): PayloadExtraido | null {
       tipo,
       mediaUrl,
       produtoTag: produtoTag || undefined,
+      checkoutId,
+      valorCarrinho,
     };
   }
 
@@ -355,7 +395,7 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
     return res.status(200).json({ ok: true, ignorado: true, motivo: "Payload sem conteúdo" });
   }
 
-  const { telefone, nome, texto, tipo, mediaUrl, produtoTag } = payload;
+  const { telefone, nome, texto, tipo, mediaUrl, produtoTag, checkoutId, valorCarrinho } = payload;
 
   // Namespacing por agente: garante isolamento total de memória e buffer entre agentes.
   // O mesmo número de telefone pode falar com agentes diferentes sem cruzar histórico.
@@ -393,9 +433,9 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
         agenteId: agente.id,
         telefone,
         nome: nome ?? ctxAnterior?.nome ?? null,
-        // produtoTag: mantém o valor mais recente — se o lead enviou várias msgs,
-        // a última que trouxer o campo vence; caso não venha, preserva o anterior.
         produtoTag: produtoTag ?? ctxAnterior?.produtoTag,
+        checkoutId: checkoutId ?? ctxAnterior?.checkoutId,
+        valorCarrinho: valorCarrinho ?? ctxAnterior?.valorCarrinho,
       });
 
       // Cria ou recupera o atendimento imediatamente (não espera debounce)
@@ -451,6 +491,8 @@ export async function receberMensagemUnnichat(req: Request, res: Response) {
           telefone: ctx.telefone,
           nome: ctx.nome,
           produtoTag: ctx.produtoTag,
+          checkoutId: ctx.checkoutId,
+          valorCarrinho: ctx.valorCarrinho,
         }).catch((err) => {
           console.error("[UNNICHAT] Erro ao processar lote:", err instanceof Error ? err.message : err);
         });
@@ -478,16 +520,18 @@ interface ProdutoVariadoCtx {
 
 /**
  * Quando o agente é do tipo Produtos Variados (`produto === "PRODUTOS_VARIADOS"`),
- * resolve o contexto correto a partir do campo `produtoTag` vindo do payload.
+ * resolve o contexto correto com base no Checkout_ID recebido no evento do Unnichat.
  *
  * Algoritmo de matching (em ordem de prioridade):
- *   1. Correspondência exata (case-insensitive)
- *   2. Nome do produto contém a tag ou vice-versa
- *   3. Fallback: inclui todos os produtos no contexto
+ *   1. Checkout_ID exato (campo checkoutIdFirepay do produto) — roteamento primário
+ *   2. Nome do produto contém o produtoTag ou vice-versa — fallback
+ *   3. Todos os produtos como contexto — último recurso
  */
 function resolverContextoProdutoVariado(
   contextoProdutosJson: string,
+  checkoutId: string | undefined,
   produtoTag: string | undefined,
+  valorCarrinho?: string,
 ): string {
   let produtos: ProdutoVariadoCtx[] = [];
 
@@ -495,48 +539,55 @@ function resolverContextoProdutoVariado(
     const parsed = JSON.parse(contextoProdutosJson);
     if (Array.isArray(parsed)) produtos = parsed as ProdutoVariadoCtx[];
   } catch {
-    return contextoProdutosJson; // não é JSON — retorna como está
+    return contextoProdutosJson;
   }
 
   if (produtos.length === 0) return contextoProdutosJson;
 
-  const formatarProduto = (p: ProdutoVariadoCtx) => {
+  const formatarProduto = (p: ProdutoVariadoCtx, carrinhoValor?: string) => {
     const linhas = [`Produto: ${p.nome}`];
     if (p.descricao)       linhas.push(`Descrição: ${p.descricao}`);
     if (p.valorProduto)    linhas.push(`Valor: ${p.valorProduto}`);
     if (p.valorParcelado)  linhas.push(`Parcelamento: ${p.valorParcelado}`);
     if (p.formasPagamento) linhas.push(`Formas de pagamento: ${p.formasPagamento}`);
     if (p.linkVendas)      linhas.push(`Link de compra: ${p.linkVendas}`);
+    if (carrinhoValor)     linhas.push(`Valor do carrinho abandonado: R$ ${carrinhoValor}`);
     return linhas.join("\n");
   };
 
-  if (!produtoTag) {
-    // Sem tag: passa todos os produtos como contexto
-    console.log("[UNNICHAT] produtoTag ausente — usando todos os produtos variados como contexto");
-    return produtos.map(formatarProduto).join("\n\n---\n\n");
+  let encontrado: ProdutoVariadoCtx | undefined;
+
+  // 1. Roteamento primário: Checkout_ID exato
+  if (checkoutId) {
+    encontrado = produtos.find((p) => p.checkoutIdFirepay?.trim() === checkoutId.trim());
+    if (encontrado) {
+      console.log(`[UNNICHAT] Produto identificado pelo Checkout_ID "${checkoutId}": "${encontrado.nome}"`);
+      return formatarProduto(encontrado, valorCarrinho);
+    }
+    console.warn(`[UNNICHAT] Checkout_ID "${checkoutId}" não encontrado — tentando fallback por nome`);
   }
 
-  const tagLower = produtoTag.toLowerCase().trim();
-
-  // 1. Exato
-  let encontrado = produtos.find((p) => p.nome.toLowerCase().trim() === tagLower);
-
-  // 2. Contém
-  if (!encontrado) {
-    encontrado = produtos.find(
-      (p) => p.nome.toLowerCase().includes(tagLower) || tagLower.includes(p.nome.toLowerCase().trim()),
-    );
+  // 2. Fallback: correspondência por nome (produtoTag)
+  if (produtoTag) {
+    const tagLower = produtoTag.toLowerCase().trim();
+    encontrado = produtos.find((p) => p.nome.toLowerCase().trim() === tagLower);
+    if (!encontrado) {
+      encontrado = produtos.find(
+        (p) => p.nome.toLowerCase().includes(tagLower) || tagLower.includes(p.nome.toLowerCase().trim()),
+      );
+    }
+    if (encontrado) {
+      console.log(`[UNNICHAT] Produto identificado por nome "${produtoTag}": "${encontrado.nome}"`);
+      return formatarProduto(encontrado, valorCarrinho);
+    }
   }
 
-  if (encontrado) {
-    console.log(`[UNNICHAT] Produto identificado pela tag "${produtoTag}": "${encontrado.nome}"`);
-    return formatarProduto(encontrado);
-  }
-
-  // 3. Fallback: todos os produtos + aviso
-  console.warn(`[UNNICHAT] Nenhum produto encontrado para tag "${produtoTag}" — enviando todos como contexto`);
-  return `[Produto solicitado: "${produtoTag}" — não encontrado na lista. Contexto completo abaixo:]\n\n` +
-    produtos.map(formatarProduto).join("\n\n---\n\n");
+  // 3. Último recurso: todos os produtos
+  const aviso = checkoutId
+    ? `[Checkout_ID "${checkoutId}" não cadastrado. Contexto completo abaixo:]\n\n`
+    : "[Sem identificador de produto. Contexto completo abaixo:]\n\n";
+  console.warn(`[UNNICHAT] ${aviso.trim()}`);
+  return aviso + produtos.map((p) => formatarProduto(p)).join("\n\n---\n\n");
 }
 
 async function processarLoteMensagens(params: {
@@ -556,8 +607,10 @@ async function processarLoteMensagens(params: {
   telefone: string;
   nome: string | null;
   produtoTag?: string;
+  checkoutId?: string;
+  valorCarrinho?: string;
 }) {
-  const { agente, unnichatApiKey, contactId, telefone, produtoTag } = params;
+  const { agente, unnichatApiKey, contactId, telefone, produtoTag, checkoutId, valorCarrinho } = params;
 
   // 1. Busca todas as mensagens pendentes no buffer (em ordem de chegada)
   const mensagensBuffer = await getPendingMessages(contactId);
@@ -660,7 +713,7 @@ async function processarLoteMensagens(params: {
   let contextoProdutosResolvido = agente.contextoProdutos;
 
   if (agente.produto === "PRODUTOS_VARIADOS" && agente.contextoProdutos) {
-    contextoProdutosResolvido = resolverContextoProdutoVariado(agente.contextoProdutos, produtoTag);
+    contextoProdutosResolvido = resolverContextoProdutoVariado(agente.contextoProdutos, checkoutId, produtoTag, valorCarrinho);
   }
 
   // 6. Chama a IA com o bloco combinado e resolvido
